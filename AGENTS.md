@@ -1,6 +1,6 @@
 # AGENTS.md — vesktop-plugins
 
-Single Vencord userplugin (QuickFind — repo root *is* the plugin, so nix-style `cp -r <source> src/userplugins/QuickFind` lands `index.tsx` correctly) + a pinned `Vencord/` checkout used only to build it. `Vencord/` is an upstream clone (pinned at `443688b5`, git-ignored) — never hand-edit it (the sync script owns `Vencord/src/userplugins/`).
+Single Vencord userplugin (`QuickFind/`, display name QuickFind) + a pinned `Vencord/` checkout used only to build it. `Vencord/` is an upstream clone (pinned at `443688b5`, git-ignored) — never hand-edit it (the sync script owns `Vencord/src/userplugins/`).
 
 ## Build (only this)
 
@@ -20,8 +20,8 @@ No `node`/`npm`/`pnpm` on PATH. Use `nix-shell -p nodejs --run "..."`. pnpm must
 
 ## Tests
 
-- Pure logic: `nix-shell -p nodejs --run "node run_tests.mjs"` (search/filters/recents, incl. perf gate + dedupe)
-- Headless e2e (real component in jsdom, mocked Discord stores): `cd e2e && npm install` (once), then `nix-shell -p nodejs --run "npm run e2e"`
+- Pure logic: `cd QuickFind && nix-shell -p nodejs --run "node run_tests.mjs"` (search/filters/recents, incl. perf gate + dedupe)
+- Headless e2e (real component in jsdom, mocked Discord stores): `cd QuickFind/e2e && npm install` (once), then `nix-shell -p nodejs --run "npm run e2e"`
 - Strict boot test (lazy-React fidelity): `npm run build:strict && node strict-test.cjs`
 - e2e harness rules, all load-bearing: `react`/`react-dom` must stay **external** in esbuild (a second bundled copy breaks `act()` flushing → every assertion reads stale DOM); only **async** `act()`; set `globalThis.IS_REACT_ACT_ENVIRONMENT = true` (`process.env` alone is ignored)
 

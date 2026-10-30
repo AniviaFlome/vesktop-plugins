@@ -72,7 +72,7 @@ function dlog(...args: any[]): void {
 
 /** Bump on every shipped iteration. Logged by the probe dump so a pasted
  * probe output proves which build is actually running. */
-export const BUILD_TAG = "qf+v2";
+export const BUILD_TAG = "qf+v1";
 
 const settings = definePluginSettings({
     // --- hijack ---
