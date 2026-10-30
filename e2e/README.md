@@ -19,7 +19,7 @@ no Discord login.
 ## Run
 
 ```sh
-cd QuickFind/e2e
+cd e2e
 nix-shell -p nodejs --run "npm install"
 nix-shell -p nodejs --run "npm run e2e"   # build + test
 ```

@@ -2,13 +2,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-rm -rf "$ROOT/Vencord/src/userplugins/quickFind"
 rm -rf "$ROOT/Vencord/src/userplugins/QuickFind"
-cp -r "$ROOT/QuickFind" "$ROOT/Vencord/src/userplugins/QuickFind"
-rm -rf "$ROOT/Vencord/src/userplugins/QuickFind/e2e/node_modules" \
-       "$ROOT/Vencord/src/userplugins/QuickFind/e2e/dist"
+mkdir -p "$ROOT/Vencord/src/userplugins/QuickFind"
+cp "$ROOT"/index.tsx "$ROOT"/channelSources.ts "$ROOT"/filters.ts "$ROOT"/search.ts "$ROOT"/recents.ts "$ROOT/Vencord/src/userplugins/QuickFind/"
 
-nix-shell -p nodejs --run "node $ROOT/QuickFind/run_tests.mjs"
+nix-shell -p nodejs --run "node $ROOT/run_tests.mjs"
 
 PNPM_CJS="/tmp/opencode/corepack/v1/pnpm/11.9.0/bin/pnpm.cjs"
 if [ ! -f "$PNPM_CJS" ]; then
