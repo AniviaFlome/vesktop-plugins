@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>qsplus harness</title>
+<style>
+  /* approximate midnight-discord tokens for visual check */
+  :root {
+    --bg-1: #45475a; --bg-2: #313244; --bg-3: #181825; --bg-4: #181825;
+    --text-0: #181825; --text-1: #cdd6f4; --text-3: #cdd6f4; --text-4: #a6adc8; --text-5: #6c7085;
+    --accent-1: #b4befe; --accent-2: #cba6f7; --accent-3: #cba6f7;
+    --roundness-l: 20px; --roundness-m: 16px; --roundness-s: 12px; --roundness-xs: 10px; --roundness-xxs: 8px;
+    --background-floating: #2b2d31; --background-modifier-active: rgba(255,255,255,.1);
+    --brand-experiment-560: #5865F2; --text-normal: #dbdee1; --text-muted: #949ba4;
+    --header-primary: #fff; --channels-default: #949ba4;
+  }
+  body { margin: 0; background: #11111b; color: #cdd6f4; font-family: sans-serif; }
+  #report { position: fixed; left: 8px; bottom: 8px; z-index: 100000; font: 13px monospace;
+            background: #000; color: #a6e3a1; padding: 6px 10px; border-radius: 6px; max-width: 95vw; }
+</style>
+</head>
+<body>
+<div id="report">QSPLUS-HARNESS starting…</div>
+<script>
+  window.IS_REACT_ACT_ENVIRONMENT = false;
+  window.__qsNoAct = true;
+  window.__qsErrors = [];
+  window.addEventListener("error", (e) => window.__qsErrors.push(String(e.message).slice(0, 200)));
+</script>
+<script src="./harness-bundle.js"></script>
+</body>
+</html>

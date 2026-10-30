@@ -1,0 +1,21 @@
+{
+  "name": "quickfind-e2e",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Headless e2e for QuickFind: real component + real search/filter logic, mocked Discord stores",
+  "scripts": {
+    "build": "esbuild entry.jsx --bundle --format=cjs --platform=node --outfile=dist/bundle.cjs --external:react --external:react-dom --external:react-dom/client --alias:@api/Settings=./mocks/api-settings.js --alias:@utils/constants=./mocks/utils-constants.js --alias:@utils/Logger=./mocks/utils-logger.js --alias:@utils/types=./mocks/utils-types.js --alias:@webpack/common=./mocks/webpack-common.jsx --alias:@webpack=./mocks/webpack.js --alias:@components/ErrorBoundary=./mocks/error-boundary.jsx --log-level=warning",
+    "build:strict": "esbuild entry-strict.jsx --bundle --format=cjs --platform=node --outfile=dist/bundle-strict.cjs --external:react --external:react-dom --external:react-dom/client --alias:@api/Settings=./mocks/api-settings.js --alias:@utils/constants=./mocks/utils-constants.js --alias:@utils/Logger=./mocks/utils-logger.js --alias:@utils/types=./mocks/utils-types.js --alias:@webpack/common=./mocks/webpack-common-strict.jsx --alias:@webpack=./mocks/webpack.js --alias:@components/ErrorBoundary=./mocks/error-boundary.jsx --log-level=warning",
+    "test:strict": "node strict-test.cjs",
+    "test": "node run-tests.cjs",
+    "e2e": "npm run build && npm run test"
+  },
+  "dependencies": {
+    "jsdom": "^24.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}
