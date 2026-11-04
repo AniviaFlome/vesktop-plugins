@@ -2,9 +2,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# BUG-02 fix: fail early with actionable instructions when the pinned upstream
-# checkout is absent (it is git-ignored, so a fresh clone has no Vencord/).
-# Previously `cp` died here with a bare "No such file or directory".
+# Fail early when the pinned upstream checkout is absent (git-ignored,
+# so a fresh clone has no Vencord/).
 if [ ! -f "$ROOT/Vencord/package.json" ]; then
     echo "ERROR: Vencord checkout missing at $ROOT/Vencord" >&2
     echo "Clone the pinned upstream first, e.g.:" >&2
@@ -36,8 +35,7 @@ cd "$ROOT/Vencord"
 nix-shell -p nodejs --run "node $PNPM_CJS build"
 
 for f in vencordDesktopMain.js vencordDesktopPreload.js vencordDesktopRenderer.js vencordDesktopRenderer.css; do
-    # BUG-02 fix: a failed build must not leave fresh symlinks pointing at a
-    # stale dist. Verify each artifact exists before (re)linking it.
+    # Verify each artifact exists before (re)linking it.
     if [ ! -f "dist/$f" ]; then
         echo "ERROR: dist/$f missing after build" >&2
         exit 1
@@ -54,8 +52,7 @@ try:
         s = json.load(f)
     created = False
 except FileNotFoundError:
-    # BUG-02 fix: a missing state.json used to exit 0 silently, leaving
-    # Vesktop on its default vencordDir (silently broken). Create it.
+    # A missing state.json is created; corrupt JSON exits 1.
     s = {}
     created = True
 except Exception as e:
@@ -73,9 +70,7 @@ else:
 EOF
 
 echo "--- verifying plugin in bundle:"
-# BUG-02 fix: case-sensitive match on the exact plugin name. The old
-# `grep -ci quickfind` also matched unrelated substrings and could pass on a
-# stale bundle that merely mentions the word.
+# Case-sensitive match on the exact plugin name.
 COUNT=$(grep -c "QuickFind" dist/vencordDesktopRenderer.js || true)
 echo "QuickFind references in vencordDesktopRenderer.js: $COUNT"
 if [ "$COUNT" -eq 0 ]; then

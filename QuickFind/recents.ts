@@ -33,10 +33,7 @@ export function loadRecents(): RecentMap {
     if (!s) return mem;
     try {
         const raw = s.getItem(KEY);
-        // BUG-01 fix: validate the persisted payload. A corrupted/truncated
-        // localStorage value (string, number, array, null, or entries with
-        // non-numeric count/lastAt) used to poison the module state and break
-        // later recordOpen/attachRecents calls. Sanitize or reset to {}.
+        // Validate the persisted payload; corrupted values reset to {}.
         if (raw) mem = sanitizeRecentMap(JSON.parse(raw));
     } catch {
         mem = {};

@@ -593,11 +593,9 @@ async function main() {
         }
     }
 
-    // 14k. BUG-03: global-only hasAnyUnread() shape (no hasUnread; zero-arg
-    // hasAnyUnread that throws when passed a guild id, like a strict client
-    // build would). The fixed arity probe must call it WITHOUT args: the old
-    // `s.length` check always passed the guild id, so every call threw (caught
-    // -> unread silently missed). Assert the call convention directly.
+    // 14k. Global-only hasAnyUnread() shape (no hasUnread; zero-arg
+    // hasAnyUnread that throws when passed a guild id). The arity probe must
+    // call it WITHOUT args; assert the call convention directly.
     {
         const { __unread, GuildReadStateStore } = require("./dist/bundle.cjs");
         const origHasUnread = GuildReadStateStore.hasUnread;
@@ -627,7 +625,7 @@ async function main() {
         }
     }
 
-    // 14l. BUG-03 pin: guild-scoped hasAnyUnread (no hasUnread) still boosts
+    // 14l. Guild-scoped hasAnyUnread (no hasUnread) still boosts
     // the unread guild to the top of a guild-only query.
     {
         const { __unread, GuildReadStateStore } = require("./dist/bundle.cjs");

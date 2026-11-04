@@ -60,9 +60,7 @@ const logger = new Logger("QuickFind");
 /** Dormant debug logging. Enable in any client (including production) with
  * `window.__qsDebug = true` in DevTools, then watch the console / read
  * `window.__qsLog` (last 80 entries). Zero cost when off.
- * BUG-05 note: entries may contain query text / DM names, so this stays
- * strictly opt-in and each entry is truncated; never enable routinely on a
- * shared machine. */
+ * Debug entries may contain query text; keep opt-in only. */
 function dlog(...args: any[]): void {
     try {
         const w = window as any;
@@ -279,13 +277,7 @@ function safeHasGuildUnread(guildId: string): boolean {
         if (typeof s.hasUnread === "function") return !!s.hasUnread(guildId);
         if (typeof s.hasAnyUnread === "function") {
             try {
-                // BUG-03 fix: probe the FUNCTION's arity, not the store's.
-                // The old code read `s.length` (the store object, almost always
-                // undefined), so it always took the guild-scoped branch. A
-                // global-only build would then receive a spurious guildId arg
-                // (ignored today, but a shape change could flip behavior).
-                // Function.length survives minification (parameter count is
-                // preserved), and the try/catch covers any remaining mismatch.
+                // Probe the function's arity (Function.length survives minification).
                 const takesGuild = s.hasAnyUnread.length >= 1;
                 return takesGuild ? !!s.hasAnyUnread(guildId) : !!s.hasAnyUnread();
             } catch {
@@ -302,10 +294,7 @@ function safeHasGuildUnread(guildId: string): boolean {
     return false;
 }
 
-/** BUG-05 hardening: only http(s) image URLs ever reach <img src>. A
- * compromised store value (javascript:/data:) degrades to the glyph fallback
- * instead. Deliberately any-https (not a CDN allowlist) so a future Discord
- * media host doesn't blank all avatars. */
+/** Only http(s) image URLs ever reach <img src>; anything else falls back to the glyph. */
 function safeImgSrc(u: unknown): string | undefined {
     return typeof u === "string" && /^https:\/\//.test(u) ? u : undefined;
 }
@@ -549,13 +538,8 @@ function collectVersionKey(): string {
         } catch {
             /* ignore */
         }
-        // BUG-04 fix: the old key fingerprinted only channel/friend COUNTS, so
-        // a channel rename (or a same-count add+remove) served stale names for
-        // the whole TTL. Hash channel names when getAll is available (already
-        // in memory; capped at 2000 names x 8 chars so key computation stays
-        // sub-millisecond) and fall back to the count when it isn't. Remaining
-        // known staleness: renames past the 2000 cap, or any change when even
-        // counts are unavailable — both still bounded by COLLECT_TTL_MS.
+        // Hash channel names when getAll is available (capped 2000x8, sub-ms);
+        // otherwise fall back to counts. Residual staleness bounded by COLLECT_TTL_MS.
         let channels = -1;
         let channelFp = 0;
         try {
@@ -820,9 +804,7 @@ function RowIcon({ item }: { item: SearchableItem; }) {
         );
     }
     if (item.type === "guild") {
-        // BUG-06 fix: name is typed string but a future store shape (or mock)
-        // could deliver null/undefined; trim()[0] on that throws inside render
-        // and blanks the row (ErrorBoundary). Degrade to "?" instead.
+        // Guard non-string names; degrade to "?".
         const rawName = typeof item.name === "string" ? item.name.trim() : "";
         const letter = (rawName[0] ?? "?").toUpperCase();
         return (

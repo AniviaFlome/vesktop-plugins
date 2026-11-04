@@ -162,7 +162,7 @@ r = rankAndFilter(
 );
 ok(r[0].id === "1" || r[0].id === "2", "recent sort puts opened first");
 
-// --- BUG-01 regression: corrupted persisted recents sanitize instead of poisoning state ---
+// --- corrupted persisted recents sanitize instead of poisoning state ---
 {
     eq(Object.keys(sanitizeRecentMap('"just a string"')).length, 0, "sanitize rejects string payload");
     eq(Object.keys(sanitizeRecentMap(123)).length, 0, "sanitize rejects number payload");
