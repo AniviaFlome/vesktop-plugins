@@ -361,9 +361,26 @@ export function rankAndFilter<T extends SearchableItem>(
     }
 
     if (opts.sortBy === "alphabetical") {
-        scored.sort((a, b) => (a.item.name ?? "").localeCompare(b.item.name ?? ""));
+        // Type priority is a hard tier for real queries: every matching
+        // server ranks above every matching channel regardless of name or
+        // relevance gap (soft score boosts like kindBoost/currentGuildBoost
+        // can never bridge an exact-vs-partial gap, e.g. #lounge vs
+        // "The Lounge"). Empty queries keep the old pure-alphabetical mix
+        // so one huge category can't crowd out the rest once truncated.
+        // kindBoost 0 (or off) disables the tiers -> pure alphabetical.
+        if (q && kindOrder && kindStep > 0) {
+            scored.sort((a, b) => kindRankOf(kindOrder, a.item.type) - kindRankOf(kindOrder, b.item.type)
+                || (a.item.name ?? "").localeCompare(b.item.name ?? ""));
+        } else {
+            scored.sort((a, b) => (a.item.name ?? "").localeCompare(b.item.name ?? ""));
+        }
     } else if (opts.sortBy === "recent") {
-        scored.sort((a, b) => (b.item.lastOpenedAt ?? 0) - (a.item.lastOpenedAt ?? 0) || b.score - a.score);
+        if (q && kindOrder && kindStep > 0) {
+            scored.sort((a, b) => kindRankOf(kindOrder, a.item.type) - kindRankOf(kindOrder, b.item.type)
+                || (b.item.lastOpenedAt ?? 0) - (a.item.lastOpenedAt ?? 0) || b.score - a.score);
+        } else {
+            scored.sort((a, b) => (b.item.lastOpenedAt ?? 0) - (a.item.lastOpenedAt ?? 0) || b.score - a.score);
+        }
     } else if (!q) {
         // Empty query: exact-score tiers, round-robin item kinds inside each
         // tier. Without this every item ties near 0 and stable sort keeps
@@ -408,8 +425,20 @@ export function rankAndFilter<T extends SearchableItem>(
         if (ranked.length > maxResults) ranked.length = maxResults;
         return ranked;
     } else {
-        scored.sort((a, b) => b.score - a.score
-            || (kindOrder ? kindRankOf(kindOrder, a.item.type) - kindRankOf(kindOrder, b.item.type) : 0));
+        // Non-empty relevance: type priority is a hard tier, not a soft
+        // score nudge. The old soft boost (kindBoost points) lost to
+        // exact-vs-partial relevance gaps (substring gap ~140 > max boost
+        // 180 spread only in theory, fuzzy gap + currentGuild/recent/unread
+        // boosts flip it in practice), so "servers first" let #lounge beat
+        // "The Lounge". Sort by kind tier first, relevance within each tier.
+        // kindBoost 0 (or off) keeps pure relevance with a kind tie-break.
+        if (kindOrder && kindStep > 0) {
+            scored.sort((a, b) => kindRankOf(kindOrder, a.item.type) - kindRankOf(kindOrder, b.item.type)
+                || b.score - a.score);
+        } else {
+            scored.sort((a, b) => b.score - a.score
+                || (kindOrder ? kindRankOf(kindOrder, a.item.type) - kindRankOf(kindOrder, b.item.type) : 0));
+        }
     }
 
     if (scored.length > maxResults) scored.length = maxResults;

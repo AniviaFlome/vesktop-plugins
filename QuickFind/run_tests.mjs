@@ -19,7 +19,7 @@ import {
 import { applyFilters, DEFAULT_FILTERS } from "./filters.ts";
 import { dedupeUserRows } from "./filters.ts";
 import { asChannelArray, channelTypeToItem, gatherChannelCandidates, isArchivedChannel, resolveGuildId } from "./channelSources.ts";
-import { __resetForTests, attachRecents, clearRecents, loadRecents, recordOpen } from "./recents.ts";
+import { __resetForTests, attachRecents, clearRecents, loadRecents, recordOpen, sanitizeRecentMap } from "./recents.ts";
 
 let passed = 0;
 let failed = 0;
@@ -161,6 +161,31 @@ r = rankAndFilter(
     { ...DEFAULT_SEARCH_OPTIONS, sortBy: "recent", maxResults: 10 },
 );
 ok(r[0].id === "1" || r[0].id === "2", "recent sort puts opened first");
+
+// --- BUG-01 regression: corrupted persisted recents sanitize instead of poisoning state ---
+{
+    eq(Object.keys(sanitizeRecentMap('"just a string"')).length, 0, "sanitize rejects string payload");
+    eq(Object.keys(sanitizeRecentMap(123)).length, 0, "sanitize rejects number payload");
+    eq(Object.keys(sanitizeRecentMap(null)).length, 0, "sanitize rejects null payload");
+    eq(Object.keys(sanitizeRecentMap(["a", "b"])).length, 0, "sanitize rejects array payload");
+    const mixed = sanitizeRecentMap({
+        good: { count: 3, lastAt: 100 },
+        badCount: { count: "3", lastAt: 100 },
+        badAt: { count: 1, lastAt: "now" },
+        negative: { count: -1, lastAt: 5 },
+        notObj: "nope",
+        nestedArr: [1, 2],
+    });
+    ok(Object.keys(mixed).length === 1 && mixed.good.count === 3, "sanitize keeps only well-formed entries");
+    // recordOpen ignores empty ids instead of creating junk keys.
+    __resetForTests();
+    clearRecents();
+    recordOpen("");
+    ok(Object.keys(loadRecents()).length === 0, "recordOpen ignores empty id");
+    // attachRecents treats malformed entries as a miss (clears, never throws).
+    const stale = attachRecents([{ id: "x", name: "x", type: "text", lastOpenedAt: 5, useCount: 9 }]);
+    ok(stale[0].useCount === undefined && stale[0].lastOpenedAt === undefined, "attachRecents clears stale recency on miss");
+}
 
 // --- performance: 5000 items must filter fast ---
 const big = [];
@@ -458,6 +483,46 @@ const _guilds = { g1: { id: "g1", name: "G1" }, g2: { id: "g2", name: "G2" } };
     ok(e2[0].type === "dm", "empty query with people-first starts with a DM");
 }
 
+// --- regression: servers-first is a hard tier (exact #lounge vs "The Lounge") ---
+{
+    const lounge = () => buildIndex([
+        { id: "c1", name: "lounge", type: "text", guildId: "g1" },
+        { id: "g9", name: "the lounge", type: "guild", guildId: "g9" },
+    ], false, true);
+    const sf20 = { ...DEFAULT_SEARCH_OPTIONS, maxResults: 10, kindOrder: KIND_ORDER_PRESETS["servers-first"], kindBoost: 20 };
+    const sf60 = { ...DEFAULT_SEARCH_OPTIONS, maxResults: 10, kindOrder: KIND_ORDER_PRESETS["servers-first"], kindBoost: 60 };
+    // fuzzy default: exact channel outscores the partial server on relevance alone,
+    // but the tier must still put the server first.
+    ok(rankAndFilter(lounge(), "lounge", sf20)[0].id === "g9", "servers-first beats exact-vs-partial fuzzy gap (boost 20)");
+    ok(rankAndFilter(lounge(), "lounge", sf60)[0].id === "g9", "servers-first beats exact-vs-partial fuzzy gap (boost 60)");
+    // substring gap (~140pts) dwarfs any soft boost: tiers must still hold.
+    ok(rankAndFilter(lounge(), "lounge", { ...sf20, mode: "substring", fuzzyEnabled: false })[0].id === "g9", "servers-first holds in substring mode (boost 20)");
+    ok(rankAndFilter(lounge(), "lounge", { ...sf60, mode: "substring", fuzzyEnabled: false })[0].id === "g9", "servers-first holds in substring mode (boost 60)");
+    // cross-kind boosts (current guild / recency) order within a tier only.
+    ok(rankAndFilter(lounge(), "lounge", { ...sf20, currentGuildId: "g1", currentGuildBoost: 500 })[0].id === "g9", "servers-first survives currentGuildBoost on the channel");
+    const recentLounge = () => buildIndex([
+        { id: "c1", name: "lounge", type: "text", guildId: "g1", useCount: 12, lastOpenedAt: Date.now() },
+        { id: "g9", name: "the lounge", type: "guild", guildId: "g9" },
+    ], false, true);
+    ok(rankAndFilter(recentLounge(), "lounge", sf20)[0].id === "g9", "servers-first survives recentBoost on the channel");
+    // off / zero boost keeps pure relevance (channel first here).
+    ok(rankAndFilter(lounge(), "lounge", { ...DEFAULT_SEARCH_OPTIONS, maxResults: 10, mode: "substring", fuzzyEnabled: false })[0].id === "c1", "priority off keeps pure relevance (channel first)");
+    ok(rankAndFilter(lounge(), "lounge", { ...sf20, kindOrder: null })[0].id === "c1", "null kindOrder keeps pure relevance");
+    ok(rankAndFilter(lounge(), "lounge", { ...sf20, kindBoost: 0 })[0].id === "c1", "kindBoost 0 disables tiers (pure relevance)");
+    // tiers group but relevance still orders WITHIN a tier.
+    const twoServers = () => buildIndex([
+        { id: "c1", name: "lounge", type: "text", guildId: "g1" },
+        { id: "g8", name: "lounge club", type: "guild", guildId: "g8" },
+        { id: "g9", name: "the lounge", type: "guild", guildId: "g9" },
+    ], false, true);
+    const grouped = rankAndFilter(twoServers(), "lounge", sf20);
+    ok(grouped[0].type === "guild" && grouped[1].type === "guild" && grouped[2].type === "text", "servers-first groups tiers, channels last", grouped.map(i => `${i.type}:${i.name}`).join(" | "));
+    // channels-first mirrors: channel tier first even when the server matches well.
+    ok(rankAndFilter(lounge(), "lounge", { ...DEFAULT_SEARCH_OPTIONS, maxResults: 10, kindOrder: KIND_ORDER_PRESETS["channels-first"], kindBoost: 20 })[0].id === "c1", "channels-first keeps channel on top for lounge");
+    // alphabetical/recent also respect tiers on real queries.
+    ok(rankAndFilter(lounge(), "lounge", { ...sf20, sortBy: "alphabetical" })[0].id === "g9", "servers-first holds under alphabetical sort");
+    ok(rankAndFilter(recentLounge(), "lounge", { ...sf20, sortBy: "recent" })[0].id === "g9", "servers-first holds under recent sort");
+}
 // --- normalize memo: repeat indexing stays consistent across flags ---
 {
     const a = buildIndex([{ id: "1", name: "Café Générale", type: "text" }], false, true);
