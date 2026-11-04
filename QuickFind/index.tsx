@@ -59,12 +59,15 @@ const logger = new Logger("QuickFind");
 
 /** Dormant debug logging. Enable in any client (including production) with
  * `window.__qsDebug = true` in DevTools, then watch the console / read
- * `window.__qsLog` (last 80 entries). Zero cost when off. */
+ * `window.__qsLog` (last 80 entries). Zero cost when off.
+ * BUG-05 note: entries may contain query text / DM names, so this stays
+ * strictly opt-in and each entry is truncated; never enable routinely on a
+ * shared machine. */
 function dlog(...args: any[]): void {
     try {
         const w = window as any;
         if (!w.__qsDebug) return;
-        (w.__qsLog ??= []).push(args.map(String).join(" "));
+        (w.__qsLog ??= []).push(args.map((a) => String(a).slice(0, 200)).join(" ").slice(0, 500));
         if (w.__qsLog.length > 80) w.__qsLog.shift();
         console.log("[QS+]", ...args);
     } catch { /* logging must never break the plugin */ }
@@ -276,16 +279,35 @@ function safeHasGuildUnread(guildId: string): boolean {
         if (typeof s.hasUnread === "function") return !!s.hasUnread(guildId);
         if (typeof s.hasAnyUnread === "function") {
             try {
-                // Some builds take a guild id, others are global-only.
-                return s.length === 0 ? !!s.hasAnyUnread() : !!s.hasAnyUnread(guildId);
+                // BUG-03 fix: probe the FUNCTION's arity, not the store's.
+                // The old code read `s.length` (the store object, almost always
+                // undefined), so it always took the guild-scoped branch. A
+                // global-only build would then receive a spurious guildId arg
+                // (ignored today, but a shape change could flip behavior).
+                // Function.length survives minification (parameter count is
+                // preserved), and the try/catch covers any remaining mismatch.
+                const takesGuild = s.hasAnyUnread.length >= 1;
+                return takesGuild ? !!s.hasAnyUnread(guildId) : !!s.hasAnyUnread();
             } catch {
-                return false;
+                try {
+                    return !!s.hasAnyUnread();
+                } catch {
+                    return false;
+                }
             }
         }
     } catch {
         /* unknown shape -> no unread */
     }
     return false;
+}
+
+/** BUG-05 hardening: only http(s) image URLs ever reach <img src>. A
+ * compromised store value (javascript:/data:) degrades to the glyph fallback
+ * instead. Deliberately any-https (not a CDN allowlist) so a future Discord
+ * media host doesn't blank all avatars. */
+function safeImgSrc(u: unknown): string | undefined {
+    return typeof u === "string" && /^https:\/\//.test(u) ? u : undefined;
 }
 
 function cdnIconUrl(kind: "icons" | "avatars" | "embed/avatars", id: string, hash: string, size = 32): string {
@@ -527,9 +549,32 @@ function collectVersionKey(): string {
         } catch {
             /* ignore */
         }
+        // BUG-04 fix: the old key fingerprinted only channel/friend COUNTS, so
+        // a channel rename (or a same-count add+remove) served stale names for
+        // the whole TTL. Hash channel names when getAll is available (already
+        // in memory; capped at 2000 names x 8 chars so key computation stays
+        // sub-millisecond) and fall back to the count when it isn't. Remaining
+        // known staleness: renames past the 2000 cap, or any change when even
+        // counts are unavailable — both still bounded by COLLECT_TTL_MS.
         let channels = -1;
+        let channelFp = 0;
         try {
-            if (typeof cs?.getChannelIds === "function") {
+            if (cs && typeof cs.getAll === "function") {
+                const all = cs.getAll();
+                const vals: any[] = Array.isArray(all)
+                    ? all
+                    : (all && typeof all === "object" ? Object.values(all) : []);
+                if (Array.isArray(vals)) {
+                    channels = vals.length;
+                    const n = Math.min(vals.length, 2000);
+                    for (let i = 0; i < n; i++) {
+                        const rawCh: any = (vals[i] as any)?.channel ?? vals[i];
+                        const nm = (rawCh?.name ?? "") as string;
+                        channelFp = (channelFp * 31 + nm.length) | 0;
+                        for (let j = 0; j < Math.min(nm.length, 8); j++) channelFp = (channelFp * 31 + nm.charCodeAt(j)) | 0;
+                    }
+                }
+            } else if (typeof cs?.getChannelIds === "function") {
                 const ids = cs.getChannelIds();
                 if (Array.isArray(ids)) channels = ids.length;
             }
@@ -549,7 +594,7 @@ function collectVersionKey(): string {
         // (not just how it is filtered), so they must invalidate the cache.
         const st: any = settings.store;
         const shape = `${st.showUsers ?? true ? 1 : 0}${st.friendsOnly ? 1 : 0}${st.caseSensitive ? 1 : 0}${st.normalize ?? true ? 1 : 0}`;
-        return `${guildIds.length}:${channels}:${friends}:${nameFp}:${shape}`;
+        return `${guildIds.length}:${channels}:${channelFp}:${friends}:${nameFp}:${shape}`;
     } catch {
         return "";
     }
@@ -733,11 +778,14 @@ function GroupGlyph() {
 }
 
 function RowIcon({ item }: { item: SearchableItem; }) {
-    if (item.iconUrls && item.iconUrls.length > 0) {
+    const safeUrls = Array.isArray(item.iconUrls)
+        ? item.iconUrls.map(safeImgSrc).filter((u): u is string => !!u)
+        : [];
+    if (safeUrls.length > 0) {
         // Group DM: overlapping avatar stack like Discord's own group icons.
         return (
             <span style={{ width: 24, height: 24, display: "flex", alignItems: "center", flexShrink: 0, overflow: "hidden" }}>
-                {item.iconUrls.slice(0, 3).map((url, i) => (
+                {safeUrls.slice(0, 3).map((url, i) => (
                     <img
                         key={i}
                         src={url}
@@ -755,10 +803,11 @@ function RowIcon({ item }: { item: SearchableItem; }) {
             </span>
         );
     }
-    if (item.iconUrl) {
+    const safeUrl = safeImgSrc(item.iconUrl);
+    if (safeUrl) {
         return (
             <img
-                src={item.iconUrl}
+                src={safeUrl}
                 draggable={false}
                 style={{
                     width: 24,
@@ -771,7 +820,11 @@ function RowIcon({ item }: { item: SearchableItem; }) {
         );
     }
     if (item.type === "guild") {
-        const letter = (item.name.trim()[0] ?? "?").toUpperCase();
+        // BUG-06 fix: name is typed string but a future store shape (or mock)
+        // could deliver null/undefined; trim()[0] on that throws inside render
+        // and blanks the row (ErrorBoundary). Degrade to "?" instead.
+        const rawName = typeof item.name === "string" ? item.name.trim() : "";
+        const letter = (rawName[0] ?? "?").toUpperCase();
         return (
             <span
                 style={{
