@@ -21,6 +21,7 @@ import {
     React,
     ReadStateStore,
     RelationshipStore,
+    SelectedChannelStore,
     SelectedGuildStore,
     useCallback,
     useEffect,
@@ -624,11 +625,60 @@ export function collectItems(): SearchableItem[] {
     return items;
 }
 
+/**
+ * Last-visited channel for a guild, validated against ChannelStore.
+ * Discord's own server click restores this; calling
+ * NavigationRouter.transitionToGuild(guildId) bare drops that memory and
+ * lands on the first channel instead. Every getter is optional-chained so
+ * unknown client shapes degrade to the guild fallback instead of a crash.
+ */
+function getLastGuildChannelId(guildId: string): string | null {
+    try {
+        const scs: any = SelectedChannelStore as any;
+        if (!scs || typeof guildId !== "string" || !guildId) return null;
+        const getters: Array<() => unknown> = [
+            () => scs?.getChannelId?.(guildId),
+            () => scs?.getCurrentlySelectedChannelId?.(guildId),
+            () => scs?.getLastSelectedChannelId?.(guildId),
+            () => scs?.getMostRecentSelectedTextChannelId?.(guildId),
+        ];
+        for (const get of getters) {
+            let id: unknown = null;
+            try {
+                id = get();
+            } catch {
+                continue;
+            }
+            if (typeof id !== "string" || !id) continue;
+            try {
+                const ch: any = (ChannelStore as any)?.getChannel?.(id);
+                if (!ch) continue;
+                // Stale ids (deleted channel, moved thread) fall through to
+                // the guild fallback instead of navigating nowhere.
+                if (resolveGuildId(ch) !== guildId) continue;
+            } catch {
+                continue;
+            }
+            return id;
+        }
+    } catch {
+        /* fall through to guild fallback */
+    }
+    return null;
+}
+
 function navigateTo(item: SearchableItem, onDone: () => void): void {
     try {
         recordOpen(item.id);
         if (item.type === "guild") {
-            (NavigationRouter as any)?.transitionToGuild?.(item.id);
+            // Restore the last channel like a native server click does.
+            // Bare transitionToGuild(guildId) lands on the first channel.
+            const lastId = getLastGuildChannelId(item.id);
+            if (lastId) {
+                (ChannelRouter as any)?.transitionToChannel?.(lastId);
+            } else {
+                (NavigationRouter as any)?.transitionToGuild?.(item.id);
+            }
         } else if (item.type === "user") {
             // Open (or create) a DM.
             (ChannelActionCreators as any)?.openPrivateChannel?.(item.id);

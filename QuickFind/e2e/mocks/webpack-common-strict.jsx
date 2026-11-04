@@ -84,6 +84,13 @@ export const UserStore = {
 export const SelectedGuildStore = {
     getGuildId: () => "g1",
 };
+export const __lastSelected = { channels: new Map([["g1", "c2"]]) };
+export const SelectedChannelStore = {
+    getChannelId: (gid) => (gid ? __lastSelected.channels.get(gid) : undefined),
+    getCurrentlySelectedChannelId: (gid) => (gid ? __lastSelected.channels.get(gid) : undefined),
+    getLastSelectedChannelId: (gid) => (gid ? __lastSelected.channels.get(gid) : undefined),
+    getMostRecentSelectedTextChannelId: (gid) => (gid ? __lastSelected.channels.get(gid) : undefined),
+};
 export const __muted = { guilds: new Set(), channels: new Map() };
 export const UserGuildSettingsStore = {
     isMuted: (gid) => __muted.guilds.has(gid),

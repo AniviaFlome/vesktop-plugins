@@ -188,6 +188,59 @@ async function main() {
     );
     ok(!document.querySelector("input.qsplus-input"), "modal closed after Enter");
 
+    // 6b. Guild rows restore the last channel (native server-click behavior),
+    // not the first channel. Bare transitionToGuild(guildId) lands on the
+    // first channel, so guild picks must go through transitionToChannel.
+    {
+        const { __lastSelected } = require("./dist/bundle.cjs");
+        const openAndPickGuild = async () => {
+            await key(window, "keydown", { key: "k", ctrlKey: true });
+            await flush();
+            const inp = document.querySelector("input.qsplus-input");
+            const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value").set;
+            await act(async () => {
+                setter.call(inp, "alpha server");
+                inp.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+            });
+            await flush();
+            const first = listButtons()[0];
+            ok(!!first && first.dataset.type === "guild", "guild query puts the server first", first?.textContent?.slice(0, 40));
+            testApi.resetSpies();
+            await key(inp, "keydown", { key: "Enter" });
+            await flush();
+            ok(!document.querySelector("input.qsplus-input"), "modal closed after guild pick");
+        };
+        __lastSelected.channels.set("g1", "c2");
+        await openAndPickGuild();
+        ok(
+            testApi.spies.transitionToChannel.length === 1 && testApi.spies.transitionToChannel[0] === "c2" && testApi.spies.transitionToGuild.length === 0,
+            "guild pick restores last channel (c2), not first",
+            JSON.stringify(testApi.spies),
+        );
+        __lastSelected.channels.delete("g1");
+        await openAndPickGuild();
+        ok(
+            testApi.spies.transitionToGuild.length === 1 && testApi.spies.transitionToGuild[0] === "g1" && testApi.spies.transitionToChannel.length === 0,
+            "guild with no history falls back to transitionToGuild",
+            JSON.stringify(testApi.spies),
+        );
+        __lastSelected.channels.set("g1", "missing");
+        await openAndPickGuild();
+        ok(
+            testApi.spies.transitionToGuild.length === 1 && testApi.spies.transitionToGuild[0] === "g1",
+            "stale last-channel id falls back to transitionToGuild",
+            JSON.stringify(testApi.spies),
+        );
+        __lastSelected.channels.set("g1", "dm1");
+        await openAndPickGuild();
+        ok(
+            testApi.spies.transitionToGuild.length === 1 && testApi.spies.transitionToGuild[0] === "g1",
+            "last-channel from another scope falls back to transitionToGuild",
+            JSON.stringify(testApi.spies),
+        );
+        __lastSelected.channels.set("g1", "c2");
+    }
+
     // 7. Reopen works repeatedly (regression: dead ctrl+k after close).
     for (let i = 0; i < 3; i++) {
         await key(window, "keydown", { key: "k", ctrlKey: true });
