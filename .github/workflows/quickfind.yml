@@ -1,0 +1,40 @@
+name: quickfind
+on:
+  push:
+    paths:
+      - "QuickFind/**"
+      - "scripts/**"
+      - ".github/workflows/quickfind.yml"
+  pull_request:
+    paths:
+      - "QuickFind/**"
+      - "scripts/**"
+      - ".github/workflows/quickfind.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: QuickFind/e2e/package-lock.json
+      # Pure logic (search/filters/recents/channelSources). No deps.
+      - name: pure tests
+        run: node run_tests.mjs
+        working-directory: QuickFind
+      # Headless e2e: real component in jsdom + strict lazy-React boot test.
+      - name: e2e install
+        run: npm ci
+        working-directory: QuickFind/e2e
+      - name: e2e
+        run: npm run build && npm run test
+        working-directory: QuickFind/e2e
+      - name: strict boot test
+        run: npm run build:strict && npm run test:strict
+        working-directory: QuickFind/e2e
+      # Supply chain: fail on moderate+ in prod or dev deps (BUG-07).
+      - name: npm audit
+        run: npm audit --audit-level=moderate
+        working-directory: QuickFind/e2e

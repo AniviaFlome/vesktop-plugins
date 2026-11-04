@@ -33,7 +33,8 @@ export function loadRecents(): RecentMap {
     if (!s) return mem;
     try {
         const raw = s.getItem(KEY);
-        if (raw) mem = JSON.parse(raw) as RecentMap;
+        // Validate the persisted payload; corrupted values reset to {}.
+        if (raw) mem = sanitizeRecentMap(JSON.parse(raw));
     } catch {
         mem = {};
     }
@@ -57,7 +58,29 @@ function save(): void {
     }
 }
 
+/**
+ * Validate an unknown parsed payload into a RecentMap. Corrupted localStorage
+ * (truncated JSON, wrong types, entries with non-numeric fields) sanitizes to
+ * only well-formed entries instead of poisoning module state.
+ * Pure and unit-tested (see run_tests.mjs "recents corrupt payloads").
+ */
+export function sanitizeRecentMap(raw: unknown): RecentMap {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out: RecentMap = {};
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof k !== "string" || !k) continue;
+        if (!v || typeof v !== "object" || Array.isArray(v)) continue;
+        const e = v as Record<string, unknown>;
+        if (typeof e.count !== "number" || !Number.isFinite(e.count) || e.count < 0) continue;
+        if (typeof e.lastAt !== "number" || !Number.isFinite(e.lastAt) || e.lastAt < 0) continue;
+        out[k] = { count: Math.floor(e.count), lastAt: e.lastAt };
+        if (Object.keys(out).length >= MAX_ENTRIES) break;
+    }
+    return out;
+}
+
 export function recordOpen(id: string, at = Date.now()): void {
+    if (typeof id !== "string" || !id) return;
     loadRecents();
     const e = mem[id] ?? { count: 0, lastAt: 0 };
     e.count += 1;
@@ -71,7 +94,9 @@ export function attachRecents<T extends { id: string; lastOpenedAt?: number; use
     const map = loadRecents();
     for (const it of items) {
         const e = map[it.id];
-        if (e) {
+        // Defensive: only well-formed entries boost; anything else (e.g. a
+        // payload written before validation existed) clears like a miss.
+        if (e && typeof e.count === "number" && typeof e.lastAt === "number") {
             it.lastOpenedAt = e.lastAt;
             it.useCount = e.count;
         } else {

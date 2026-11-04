@@ -593,6 +593,69 @@ async function main() {
         }
     }
 
+    // 14k. Global-only hasAnyUnread() shape (no hasUnread; zero-arg
+    // hasAnyUnread that throws when passed a guild id). The arity probe must
+    // call it WITHOUT args; assert the call convention directly.
+    {
+        const { __unread, GuildReadStateStore } = require("./dist/bundle.cjs");
+        const origHasUnread = GuildReadStateStore.hasUnread;
+        const origHasAnyUnread = GuildReadStateStore.hasAnyUnread;
+        const calls = [];
+        GuildReadStateStore.hasUnread = undefined;
+        GuildReadStateStore.hasAnyUnread = function () {
+            calls.push(arguments.length);
+            if (arguments.length > 0) throw new Error("global-only: no guild arg");
+            return false;
+        };
+        try {
+            await key(window, "keydown", { key: "k", ctrlKey: true });
+            await flush();
+            ok(!!document.querySelector("input.qsplus-input"), "modal opens in global-only unread shape");
+            ok(calls.length > 0, "hasAnyUnread branch exercised", `calls=${calls.length}`);
+            ok(calls.every((n) => n === 0), "global-only hasAnyUnread called without args", `arities=${[...new Set(calls)].join(",")}`);
+            const errs = testApi.loggerCalls.filter((c) => c[0] === "error");
+            ok(errs.length === 0, "no errors logged in global-only shape", JSON.stringify(errs).slice(0, 200));
+            await key(document.querySelector("input.qsplus-input"), "keydown", { key: "Escape" });
+            await flush();
+        } finally {
+            GuildReadStateStore.hasUnread = origHasUnread;
+            GuildReadStateStore.hasAnyUnread = origHasAnyUnread;
+            __unread.channels.clear();
+            __unread.guilds.clear();
+        }
+    }
+
+    // 14l. Guild-scoped hasAnyUnread (no hasUnread) still boosts
+    // the unread guild to the top of a guild-only query.
+    {
+        const { __unread, GuildReadStateStore } = require("./dist/bundle.cjs");
+        const origHasUnread = GuildReadStateStore.hasUnread;
+        const origHasAnyUnread = GuildReadStateStore.hasAnyUnread;
+        GuildReadStateStore.hasUnread = undefined;
+        GuildReadStateStore.hasAnyUnread = (gid) => __unread.guilds.has(gid);
+        __unread.guilds.add("g7");
+        try {
+            await key(window, "keydown", { key: "k", ctrlKey: true });
+            await flush();
+            const inp = document.querySelector("input.qsplus-input");
+            const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value").set;
+            await act(async () => {
+                setter.call(inp, "server number");
+                inp.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+            });
+            await flush();
+            const first = listButtons()[0];
+            ok(!!first && first.textContent.includes("Server Number 7"), "unread guild ranks first via hasAnyUnread", first?.textContent?.slice(0, 40));
+            await key(inp, "keydown", { key: "Escape" });
+            await flush();
+        } finally {
+            GuildReadStateStore.hasUnread = origHasUnread;
+            GuildReadStateStore.hasAnyUnread = origHasAnyUnread;
+            __unread.channels.clear();
+            __unread.guilds.clear();
+        }
+    }
+
     plugin.stop();
     console.log(`\n${passed} passed, ${failed} failed`);
     process.exit(failed === 0 ? 0 : 1);

@@ -59,12 +59,13 @@ const logger = new Logger("QuickFind");
 
 /** Dormant debug logging. Enable in any client (including production) with
  * `window.__qsDebug = true` in DevTools, then watch the console / read
- * `window.__qsLog` (last 80 entries). Zero cost when off. */
+ * `window.__qsLog` (last 80 entries). Zero cost when off.
+ * Debug entries may contain query text; keep opt-in only. */
 function dlog(...args: any[]): void {
     try {
         const w = window as any;
         if (!w.__qsDebug) return;
-        (w.__qsLog ??= []).push(args.map(String).join(" "));
+        (w.__qsLog ??= []).push(args.map((a) => String(a).slice(0, 200)).join(" ").slice(0, 500));
         if (w.__qsLog.length > 80) w.__qsLog.shift();
         console.log("[QS+]", ...args);
     } catch { /* logging must never break the plugin */ }
@@ -276,16 +277,26 @@ function safeHasGuildUnread(guildId: string): boolean {
         if (typeof s.hasUnread === "function") return !!s.hasUnread(guildId);
         if (typeof s.hasAnyUnread === "function") {
             try {
-                // Some builds take a guild id, others are global-only.
-                return s.length === 0 ? !!s.hasAnyUnread() : !!s.hasAnyUnread(guildId);
+                // Probe the function's arity (Function.length survives minification).
+                const takesGuild = s.hasAnyUnread.length >= 1;
+                return takesGuild ? !!s.hasAnyUnread(guildId) : !!s.hasAnyUnread();
             } catch {
-                return false;
+                try {
+                    return !!s.hasAnyUnread();
+                } catch {
+                    return false;
+                }
             }
         }
     } catch {
         /* unknown shape -> no unread */
     }
     return false;
+}
+
+/** Only http(s) image URLs ever reach <img src>; anything else falls back to the glyph. */
+function safeImgSrc(u: unknown): string | undefined {
+    return typeof u === "string" && /^https:\/\//.test(u) ? u : undefined;
 }
 
 function cdnIconUrl(kind: "icons" | "avatars" | "embed/avatars", id: string, hash: string, size = 32): string {
@@ -527,9 +538,27 @@ function collectVersionKey(): string {
         } catch {
             /* ignore */
         }
+        // Hash channel names when getAll is available (capped 2000x8, sub-ms);
+        // otherwise fall back to counts. Residual staleness bounded by COLLECT_TTL_MS.
         let channels = -1;
+        let channelFp = 0;
         try {
-            if (typeof cs?.getChannelIds === "function") {
+            if (cs && typeof cs.getAll === "function") {
+                const all = cs.getAll();
+                const vals: any[] = Array.isArray(all)
+                    ? all
+                    : (all && typeof all === "object" ? Object.values(all) : []);
+                if (Array.isArray(vals)) {
+                    channels = vals.length;
+                    const n = Math.min(vals.length, 2000);
+                    for (let i = 0; i < n; i++) {
+                        const rawCh: any = (vals[i] as any)?.channel ?? vals[i];
+                        const nm = (rawCh?.name ?? "") as string;
+                        channelFp = (channelFp * 31 + nm.length) | 0;
+                        for (let j = 0; j < Math.min(nm.length, 8); j++) channelFp = (channelFp * 31 + nm.charCodeAt(j)) | 0;
+                    }
+                }
+            } else if (typeof cs?.getChannelIds === "function") {
                 const ids = cs.getChannelIds();
                 if (Array.isArray(ids)) channels = ids.length;
             }
@@ -549,7 +578,7 @@ function collectVersionKey(): string {
         // (not just how it is filtered), so they must invalidate the cache.
         const st: any = settings.store;
         const shape = `${st.showUsers ?? true ? 1 : 0}${st.friendsOnly ? 1 : 0}${st.caseSensitive ? 1 : 0}${st.normalize ?? true ? 1 : 0}`;
-        return `${guildIds.length}:${channels}:${friends}:${nameFp}:${shape}`;
+        return `${guildIds.length}:${channels}:${channelFp}:${friends}:${nameFp}:${shape}`;
     } catch {
         return "";
     }
@@ -733,11 +762,14 @@ function GroupGlyph() {
 }
 
 function RowIcon({ item }: { item: SearchableItem; }) {
-    if (item.iconUrls && item.iconUrls.length > 0) {
+    const safeUrls = Array.isArray(item.iconUrls)
+        ? item.iconUrls.map(safeImgSrc).filter((u): u is string => !!u)
+        : [];
+    if (safeUrls.length > 0) {
         // Group DM: overlapping avatar stack like Discord's own group icons.
         return (
             <span style={{ width: 24, height: 24, display: "flex", alignItems: "center", flexShrink: 0, overflow: "hidden" }}>
-                {item.iconUrls.slice(0, 3).map((url, i) => (
+                {safeUrls.slice(0, 3).map((url, i) => (
                     <img
                         key={i}
                         src={url}
@@ -755,10 +787,11 @@ function RowIcon({ item }: { item: SearchableItem; }) {
             </span>
         );
     }
-    if (item.iconUrl) {
+    const safeUrl = safeImgSrc(item.iconUrl);
+    if (safeUrl) {
         return (
             <img
-                src={item.iconUrl}
+                src={safeUrl}
                 draggable={false}
                 style={{
                     width: 24,
@@ -771,7 +804,9 @@ function RowIcon({ item }: { item: SearchableItem; }) {
         );
     }
     if (item.type === "guild") {
-        const letter = (item.name.trim()[0] ?? "?").toUpperCase();
+        // Guard non-string names; degrade to "?".
+        const rawName = typeof item.name === "string" ? item.name.trim() : "";
+        const letter = (rawName[0] ?? "?").toUpperCase();
         return (
             <span
                 style={{
