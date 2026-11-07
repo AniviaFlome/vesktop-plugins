@@ -1,6 +1,6 @@
 # AGENTS.md — vesktop-plugins
 
-Single Vencord userplugin (`QuickFind/`, display name QuickFind) + a pinned `Vencord/` checkout used only to build it. `Vencord/` is an upstream clone (pinned at `443688b5`, git-ignored) — never hand-edit it (the sync script owns `Vencord/src/userplugins/`).
+Single Vencord userplugin (`QuickFind/`, display name QuickFind) + a pinned `Vencord/` checkout used only to build it. `Vencord/` is an upstream clone (pinned at `383409e6`/v1.15.16 — required for Discord's rspack bundle; older pins white-screen — git-ignored) — never hand-edit it (the sync script owns `Vencord/src/userplugins/`).
 
 ## Build (only this)
 
@@ -12,7 +12,7 @@ It syncs the plugin (excluding `e2e/node_modules`, `e2e/dist`), builds with pinn
 
 ## Toolchain (NixOS)
 
-No `node`/`npm`/`pnpm` on PATH. Use `nix-shell -p nodejs --run "..."`. pnpm must be **11.9.0** via corepack (`/tmp/opencode/corepack/.../pnpm.cjs`, auto-provisioned by the script); nixpkgs pnpm is v12 and breaks the install (`ERR_PNPM_UNUSED_PATCH`). Never modify `Vencord/package.json` — same failure.
+No `node`/`npm`/`pnpm` on PATH. Use `nix-shell -p nodejs --run "..."`. pnpm must be **12.15.0** via corepack (`/tmp/opencode/corepack/.../pnpm.cjs`, auto-provisioned by the script — matches `Vencord/package.json` `packageManager`); never use nixpkgs pnpm and never modify `Vencord/package.json` (mismatched pnpm breaks the install, e.g. `ERR_PNPM_UNUSED_PATCH` seen with v12-against-old-lockfile).
 
 ## Plugin constraint (killed production once)
 

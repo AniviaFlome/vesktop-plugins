@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [ ! -f "$ROOT/Vencord/package.json" ]; then
     echo "ERROR: Vencord checkout missing at $ROOT/Vencord" >&2
     echo "Clone the pinned upstream first, e.g.:" >&2
-    echo "  git clone <vencord-upstream-url> Vencord && cd Vencord && git checkout 443688b5" >&2
+    echo "  git clone <vencord-upstream-url> Vencord && cd Vencord && git checkout 383409e6" >&2
     exit 1
 fi
 
@@ -25,10 +25,10 @@ fi
 
 nix-shell -p nodejs --run "node $ROOT/QuickFind/run_tests.mjs"
 
-PNPM_CJS="/tmp/opencode/corepack/v1/pnpm/11.9.0/bin/pnpm.cjs"
+PNPM_CJS="/tmp/opencode/corepack/v1/pnpm/12.15.0/bin/pnpm.mjs"
 if [ ! -f "$PNPM_CJS" ]; then
     export COREPACK_HOME=/tmp/opencode/corepack
-    nix-shell -p nodejs --run "corepack prepare pnpm@11.9.0 --activate"
+    nix-shell -p nodejs --run "corepack prepare pnpm@12.15.0 --activate"
 fi
 
 cd "$ROOT/Vencord"
