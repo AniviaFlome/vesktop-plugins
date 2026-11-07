@@ -413,6 +413,7 @@ const _guilds = { g1: { id: "g1", name: "G1" }, g2: { id: "g2", name: "G2" } };
 {
     // resolveGuildId falls back to the Channel class getter (frozen records).
     eq(resolveGuildId({ guild_id: "g1" }), "g1", "resolveGuildId prefers raw guild_id");
+    eq(resolveGuildId({ guildId: "g2" }), "g2", "resolveGuildId reads camelCase guildId");
     eq(resolveGuildId({ getGuildId: () => "g9" }), "g9", "resolveGuildId falls back to getGuildId()");
     const frozen = Object.freeze({ id: "x" });
     eq(resolveGuildId(frozen), null, "resolveGuildId returns null when absent");

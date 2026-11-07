@@ -123,6 +123,9 @@ export function resolveGuildId(ch: any): string | null {
     try {
         const raw = ch?.guild_id;
         if (typeof raw === "string" && raw) return raw;
+        // Some builds/shapes expose camelCase instead of the API snake_case.
+        const camel = (ch as any)?.guildId;
+        if (typeof camel === "string" && camel) return camel;
         if (typeof ch?.getGuildId === "function") {
             const v = ch.getGuildId();
             if (typeof v === "string" && v) return v;

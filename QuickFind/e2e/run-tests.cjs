@@ -238,6 +238,32 @@ async function main() {
             "last-channel from another scope falls back to transitionToGuild",
             JSON.stringify(testApi.spies),
         );
+        // Discord lazy-loads guild channels: for a guild whose channels are
+        // NOT loaded anywhere (no id lists), an uncached id cannot be proven
+        // stale, so it is trusted and handed to transitionToChannel (which
+        // loads it). g2 has no loaded channels in the mock: direct unit
+        // checks on the resolver (ranking-independent).
+        {
+            const { getLastGuildChannelId } = require("./dist/bundle.cjs");
+            __lastSelected.channels.set("g2", "888888888888888888");
+            ok(
+                getLastGuildChannelId("g2") === "888888888888888888",
+                "unloaded guild: uncached last-channel id trusted, not dropped",
+                String(getLastGuildChannelId("g2")),
+            );
+            __lastSelected.channels.set("g1", "c2");
+            ok(getLastGuildChannelId("g1") === "c2", "loaded guild: cached match resolves");
+            __lastSelected.channels.set("g1", "999999999999999999");
+            ok(getLastGuildChannelId("g1") === null, "loaded guild: unlisted id is stale, not trusted");
+            __lastSelected.channels.set("g1", "c2");
+        }
+        __lastSelected.channels.set("g1", "@me");
+        await openAndPickGuild();
+        ok(
+            testApi.spies.transitionToGuild.length === 1 && testApi.spies.transitionToGuild[0] === "g1",
+            "non-snowflake sentinel falls back to transitionToGuild",
+            JSON.stringify(testApi.spies),
+        );
         __lastSelected.channels.set("g1", "c2");
     }
 

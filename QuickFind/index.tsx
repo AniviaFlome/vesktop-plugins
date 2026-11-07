@@ -37,6 +37,7 @@ import ErrorBoundary from "@components/ErrorBoundary";
 
 import { applyFilters, dedupeUserRows, DEFAULT_FILTERS, type FilterSettings } from "./filters";
 import {
+    asChannelArray,
     channelTypeToItem,
     gatherChannelCandidates,
     isArchivedChannel,
@@ -74,7 +75,7 @@ function dlog(...args: any[]): void {
 
 /** Bump on every shipped iteration. Logged by the probe dump so a pasted
  * probe output proves which build is actually running. */
-export const BUILD_TAG = "qf+v1";
+export const BUILD_TAG = "qf+v2";
 
 const settings = definePluginSettings({
     // --- hijack ---
@@ -626,21 +627,66 @@ export function collectItems(): SearchableItem[] {
 }
 
 /**
- * Last-visited channel for a guild, validated against ChannelStore.
- * Discord's own server click restores this; calling
- * NavigationRouter.transitionToGuild(guildId) bare drops that memory and
- * lands on the first channel instead. Every getter is optional-chained so
- * unknown client shapes degrade to the guild fallback instead of a crash.
+ * Last-visited channel for a guild, mirroring a native server click.
+ * Calling NavigationRouter.transitionToGuild(guildId) bare drops Discord's
+ * last-channel memory and lands on the first channel instead, so guild picks
+ * go through ChannelRouter.transitionToChannel(lastId) with the guild call
+ * kept only as a fallback. Every getter is optional-chained so unknown
+ * client shapes degrade to the guild fallback instead of a crash.
+ *
+ * Cache discipline (why each branch exists):
+ * - Cached hit: must guild-match, else the getter ignored its arg or the
+ *   channel moved — keep probing the remaining getters.
+ * - Uncached: Discord lazy-loads, so a miss alone proves nothing. Instead
+ *   consult the guild's loaded channel id lists: when the guild IS loaded
+ *   (non-empty list) absence proves staleness -> fallback; when nothing is
+ *   loaded (empty lists) there is no evidence either way -> trust the id and
+ *   let transitionToChannel load it. The old code rejected every miss,
+ *   which is the "still goes to first channel" regression.
  */
-function getLastGuildChannelId(guildId: string): string | null {
+export function getLastGuildChannelId(guildId: string): string | null {
     try {
         const scs: any = SelectedChannelStore as any;
         if (!scs || typeof guildId !== "string" || !guildId) return null;
+        // Ids of channels this guild is known to have (loaded snapshots).
+        // null = guild not loaded anywhere -> cannot judge staleness.
+        let known: Set<string> | null = null;
+        try {
+            const cs: any = ChannelStore as any;
+            const gcs: any = GuildChannelStore as any;
+            const lists: unknown[] = [
+                typeof cs?.getChannelIds === "function" ? cs.getChannelIds(guildId) : undefined,
+                typeof gcs?.getSelectableChannelIds === "function" ? gcs.getSelectableChannelIds(guildId) : undefined,
+                typeof gcs?.getVocalChannelIds === "function" ? gcs.getVocalChannelIds(guildId) : undefined,
+            ];
+            const ids = new Set<string>();
+            for (const l of lists) {
+                if (Array.isArray(l)) for (const id of l) if (typeof id === "string" && id) ids.add(id);
+            }
+            try {
+                if (typeof gcs?.getChannels === "function") {
+                    for (const ch of asChannelArray(gcs.getChannels(guildId))) {
+                        const cid = (ch as any)?.id;
+                        if (typeof cid === "string" && cid) ids.add(cid);
+                    }
+                }
+            } catch {
+                /* single-source failure must not poison the rest */
+            }
+            if (ids.size > 0) known = ids;
+        } catch {
+            /* list failure -> cannot judge staleness, trust below */
+        }
         const getters: Array<() => unknown> = [
             () => scs?.getChannelId?.(guildId),
             () => scs?.getCurrentlySelectedChannelId?.(guildId),
             () => scs?.getLastSelectedChannelId?.(guildId),
             () => scs?.getMostRecentSelectedTextChannelId?.(guildId),
+            // Some builds ignore the guild arg on one of these; the
+            // guild-match check below keeps those results honest.
+            () => scs?.getChannelId?.(),
+            () => scs?.getCurrentlySelectedChannelId?.(),
+            () => scs?.getLastSelectedChannelId?.(),
         ];
         for (const get of getters) {
             let id: unknown = null;
@@ -649,17 +695,19 @@ function getLastGuildChannelId(guildId: string): string | null {
             } catch {
                 continue;
             }
-            if (typeof id !== "string" || !id) continue;
+            if (typeof id !== "string" || !id || id.startsWith("@")) continue;
             try {
                 const ch: any = (ChannelStore as any)?.getChannel?.(id);
-                if (!ch) continue;
-                // Stale ids (deleted channel, moved thread) fall through to
-                // the guild fallback instead of navigating nowhere.
-                if (resolveGuildId(ch) !== guildId) continue;
+                if (ch) {
+                    if (resolveGuildId(ch) !== guildId) continue;
+                    return id;
+                }
+                // Uncached: stale only when the loaded guild lists prove it.
+                if (known && !known.has(id)) continue;
+                return id;
             } catch {
                 continue;
             }
-            return id;
         }
     } catch {
         /* fall through to guild fallback */
@@ -1521,6 +1569,16 @@ export default definePlugin({
                     lines.push(`COLLECT total=${items.length} byType=${JSON.stringify(counts)} cache=${lastCollectCacheHit ? "hit" : "miss"} collectMs=${lastCollectMs}`);
                 } catch (e) {
                     lines.push(`COLLECT failed: ${String(e && (e as Error).message || e).slice(0, 200)}`);
+                }
+                try {
+                    const scs: any = SelectedChannelStore as any;
+                    const sg: any = SelectedGuildStore as any;
+                    const api = ["getChannelId", "getCurrentlySelectedChannelId", "getLastSelectedChannelId", "getMostRecentSelectedTextChannelId"]
+                        .map(k => `${k}:${typeof scs?.[k]}`).join(" ");
+                    const cur = (() => { try { return sg?.getGuildId?.() ?? "?"; } catch { return "?"; } })();
+                    lines.push(`LASTCHAN ${api} curGuild=${cur} resolved=${cur && cur !== "?" ? (getLastGuildChannelId(cur) ?? "guild-fallback") : "n/a"}`);
+                } catch (e) {
+                    lines.push(`LASTCHAN: unreadable (${String(e).slice(0, 120)})`);
                 }
                 lines.push(`PERF openMs=${Math.round(lastOpenMs)} closeMs=${Math.round(lastCloseMs)} closeMode=${lastCloseMode} closeTrigger=${lastCloseTrigger}`);
                 const out = "[QuickFind probe]\n" + lines.join("\n");
