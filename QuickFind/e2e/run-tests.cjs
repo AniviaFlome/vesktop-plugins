@@ -267,6 +267,76 @@ async function main() {
         __lastSelected.channels.set("g1", "c2");
     }
 
+    // 6c. Guild navigation never no-ops: every degraded store/router shape
+    // still lands SOMEWHERE (last channel preferred, guild fallback worst).
+    {
+        const { getLastGuildChannelId, SelectedChannelStore, ChannelRouter, __lastSelected } = require("./dist/bundle.cjs");
+        const openAndPickGuild = async () => {
+            await key(window, "keydown", { key: "k", ctrlKey: true });
+            await flush();
+            const inp = document.querySelector("input.qsplus-input");
+            const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value").set;
+            await act(async () => {
+                setter.call(inp, "alpha server");
+                inp.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+            });
+            await flush();
+            testApi.resetSpies();
+            await key(inp, "keydown", { key: "Enter" });
+            await flush();
+        };
+        // All selection getters missing (unknown client shape): fallback.
+        const savedGetters = {
+            getChannelId: SelectedChannelStore.getChannelId,
+            getCurrentlySelectedChannelId: SelectedChannelStore.getCurrentlySelectedChannelId,
+            getLastSelectedChannelId: SelectedChannelStore.getLastSelectedChannelId,
+            getMostRecentSelectedTextChannelId: SelectedChannelStore.getMostRecentSelectedTextChannelId,
+        };
+        for (const k of Object.keys(savedGetters)) SelectedChannelStore[k] = undefined;
+        try {
+            ok(getLastGuildChannelId("g1") === null, "no selection getters -> null, not a throw");
+            await openAndPickGuild();
+            ok(
+                testApi.spies.transitionToGuild.length === 1 && testApi.spies.transitionToGuild[0] === "g1",
+                "no selection getters -> guild fallback still navigates",
+                JSON.stringify(testApi.spies),
+            );
+        } finally {
+            Object.assign(SelectedChannelStore, savedGetters);
+        }
+        // Channel jump throws mid-navigate: guild fallback catches it.
+        const savedTransition = ChannelRouter.transitionToChannel;
+        ChannelRouter.transitionToChannel = () => { throw new Error("router boom"); };
+        try {
+            __lastSelected.channels.set("g1", "c2");
+            await openAndPickGuild();
+            ok(
+                testApi.spies.transitionToGuild.length === 1 && testApi.spies.transitionToGuild[0] === "g1",
+                "throwing channel jump falls back to guild",
+                JSON.stringify(testApi.spies),
+            );
+        } finally {
+            ChannelRouter.transitionToChannel = savedTransition;
+        }
+        // Channel router absent entirely: guild fallback, no silent no-op.
+        ChannelRouter.transitionToChannel = undefined;
+        try {
+            __lastSelected.channels.set("g1", "c2");
+            await openAndPickGuild();
+            ok(
+                testApi.spies.transitionToGuild.length === 1 && testApi.spies.transitionToGuild[0] === "g1",
+                "missing channel router falls back to guild",
+                JSON.stringify(testApi.spies),
+            );
+        } finally {
+            ChannelRouter.transitionToChannel = savedTransition;
+            __lastSelected.channels.set("g1", "c2");
+        }
+        // Navigation tests record opens; reset recency so later ranking
+        // tests (14c) see a deterministic baseline, not our leftovers.
+        require("./dist/bundle.cjs").clearRecents();
+    }
+
     // 7. Reopen works repeatedly (regression: dead ctrl+k after close).
     for (let i = 0; i < 3; i++) {
         await key(window, "keydown", { key: "k", ctrlKey: true });

@@ -44,6 +44,7 @@ import {
     resolveGuildId,
 } from "./channelSources";
 import { attachRecents, clearRecents, recordOpen } from "./recents";
+export { clearRecents };
 import {
     buildIndex,
     DEFAULT_SEARCH_OPTIONS,
@@ -696,18 +697,21 @@ export function getLastGuildChannelId(guildId: string): string | null {
                 continue;
             }
             if (typeof id !== "string" || !id || id.startsWith("@")) continue;
+            let ch: any = null;
             try {
-                const ch: any = (ChannelStore as any)?.getChannel?.(id);
-                if (ch) {
-                    if (resolveGuildId(ch) !== guildId) continue;
-                    return id;
-                }
-                // Uncached: stale only when the loaded guild lists prove it.
-                if (known && !known.has(id)) continue;
-                return id;
+                ch = (ChannelStore as any)?.getChannel?.(id);
             } catch {
-                continue;
+                // Lookup blew up: treat exactly like a cache miss (trust
+                // unless proven stale below), never as a rejection.
+                ch = null;
             }
+            if (ch) {
+                if (resolveGuildId(ch) !== guildId) continue;
+                return id;
+            }
+            // Uncached: stale only when the loaded guild lists prove it.
+            if (known && !known.has(id)) continue;
+            return id;
         }
     } catch {
         /* fall through to guild fallback */
@@ -720,10 +724,19 @@ function navigateTo(item: SearchableItem, onDone: () => void): void {
         recordOpen(item.id);
         if (item.type === "guild") {
             // Restore the last channel like a native server click does.
-            // Bare transitionToGuild(guildId) lands on the first channel.
+            // Bare transitionToGuild(guildId) lands on the first channel,
+            // so it is strictly a fallback: last-channel first, and even
+            // a throwing channel jump falls back to it. Every branch lands
+            // SOMEWHERE — never a silent no-op with the modal closed.
             const lastId = getLastGuildChannelId(item.id);
-            if (lastId) {
-                (ChannelRouter as any)?.transitionToChannel?.(lastId);
+            const goChannel = (ChannelRouter as any)?.transitionToChannel;
+            if (lastId && typeof goChannel === "function") {
+                try {
+                    goChannel.call(ChannelRouter, lastId);
+                } catch (e) {
+                    logger.warn("channel jump failed, falling back to guild", e);
+                    (NavigationRouter as any)?.transitionToGuild?.(item.id);
+                }
             } else {
                 (NavigationRouter as any)?.transitionToGuild?.(item.id);
             }
