@@ -586,5 +586,48 @@ const _guilds = { g1: { id: "g1", name: "G1" }, g2: { id: "g2", name: "G2" } };
     ok(rNeg.length === 1, "negative maxResults clamps to 1");
 }
 
+// --- audit batch: non-finite maxResults/sensitivity, non-string names, recents validation ---
+{
+    const many = [];
+    for (let i = 0; i < 200; i++) many.push({ id: String(i), name: "chan-" + i, type: "text", guildId: "g1" });
+    buildIndex(many, false, true);
+    const rNaN = rankAndFilter(many, "", { ...DEFAULT_SEARCH_OPTIONS, maxResults: NaN });
+    eq(rNaN.length, DEFAULT_SEARCH_OPTIONS.maxResults, "maxResults NaN falls back to default (no unbounded list)");
+    const rInf = rankAndFilter(many, "", { ...DEFAULT_SEARCH_OPTIONS, maxResults: Infinity });
+    ok(rInf.length <= 200, "maxResults Infinity caps (no unbounded DOM blowup)", `got ${rInf.length}`);
+    const rStr = rankAndFilter(many, "", { ...DEFAULT_SEARCH_OPTIONS, maxResults: "oops" });
+    eq(rStr.length, DEFAULT_SEARCH_OPTIONS.maxResults, "maxResults corrupt string falls back to default");
+
+    // sensitivity out of range clamps instead of rejecting-all / loosest-all
+    const sItems = buildIndex([{ id: "1", name: "general", type: "text", guildId: "g1" }], false, true);
+    ok(rankAndFilter(sItems, "gen", { ...DEFAULT_SEARCH_OPTIONS, maxResults: 10, sensitivity: 2 }).length === 1, "sensitivity 2 clamps to 1 (still matches)");
+    ok(rankAndFilter(sItems, "gen", { ...DEFAULT_SEARCH_OPTIONS, maxResults: 10, sensitivity: NaN }).length === 1, "sensitivity NaN falls back to default");
+    ok(fuzzyScore("gen", "general", 2) > 0, "fuzzyScore clamps high sensitivity");
+    ok(fuzzyScore("gen", "general", NaN) > 0, "fuzzyScore NaN falls back");
+
+    // non-string names coerce instead of throwing (one bad record must not empty the list)
+    let threw = false;
+    try {
+        const coerced = buildIndex([{ id: "1", name: 12345, type: "text" }], false, true);
+        ok(coerced[0].normalized === "12345", "numeric name coerces to string");
+    } catch { threw = true; }
+    ok(!threw, "numeric name does not throw");
+    eq(normalizeString(12345, false), "12345", "normalizeString coerces numbers");
+
+    // recents: bad timestamps sanitize to Date.now(), most-recent kept on overflow
+    __resetForTests();
+    clearRecents();
+    recordOpen("badNaN", NaN);
+    recordOpen("badNeg", -5);
+    const badMap = loadRecents();
+    ok(Number.isFinite(badMap["badNaN"]?.lastAt), "recordOpen NaN falls back to now");
+    ok(Number.isFinite(badMap["badNeg"]?.lastAt) && badMap["badNeg"].lastAt >= 0, "recordOpen negative falls back to now");
+    const bigRecents = {};
+    for (let i = 0; i < 100; i++) bigRecents["k" + i] = { count: 1, lastAt: i };
+    const trimmed = sanitizeRecentMap(bigRecents);
+    eq(Object.keys(trimmed).length, 60, "sanitize caps at 60");
+    ok(trimmed["k99"] && !trimmed["k0"], "sanitize keeps most-recent, drops stale");
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

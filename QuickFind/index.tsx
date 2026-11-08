@@ -535,15 +535,17 @@ function collectVersionKey(): string {
         let nameFp = 0;
         try {
             for (const id of guildIds) {
-                const n = (guilds[id]?.name ?? "") as string;
+                const rawN = (guilds[id]?.name ?? "") as unknown;
+                const n = typeof rawN === "string" ? rawN : String(rawN ?? "");
                 nameFp = (nameFp * 31 + n.length) | 0;
-                for (let i = 0; i < Math.min(n.length, 8); i++) nameFp = (nameFp * 31 + n.charCodeAt(i)) | 0;
+                for (let i = 0; i < Math.min(n.length, 32); i++) nameFp = (nameFp * 31 + n.charCodeAt(i)) | 0;
             }
         } catch {
             /* ignore */
         }
-        // Hash channel names when getAll is available (capped 2000x8, sub-ms);
-        // otherwise fall back to counts. Residual staleness bounded by COLLECT_TTL_MS.
+        // Hash channel names when getAll is available (capped 2000x32, ~1ms);
+        // otherwise fall back to counts incl. per-guild snapshots so new
+        // channels still invalidate. Residual staleness bounded by COLLECT_TTL_MS.
         let channels = -1;
         let channelFp = 0;
         try {
@@ -557,14 +559,34 @@ function collectVersionKey(): string {
                     const n = Math.min(vals.length, 2000);
                     for (let i = 0; i < n; i++) {
                         const rawCh: any = (vals[i] as any)?.channel ?? vals[i];
-                        const nm = (rawCh?.name ?? "") as string;
+                        const rawNm = (rawCh?.name ?? "") as unknown;
+                        const nm = typeof rawNm === "string" ? rawNm : String(rawNm ?? "");
                         channelFp = (channelFp * 31 + nm.length) | 0;
-                        for (let j = 0; j < Math.min(nm.length, 8); j++) channelFp = (channelFp * 31 + nm.charCodeAt(j)) | 0;
+                        for (let j = 0; j < Math.min(nm.length, 32); j++) channelFp = (channelFp * 31 + nm.charCodeAt(j)) | 0;
                     }
                 }
             } else if (typeof cs?.getChannelIds === "function") {
                 const ids = cs.getChannelIds();
                 if (Array.isArray(ids)) channels = ids.length;
+            }
+            // No global channel list: estimate from per-guild snapshots so a
+            // new channel in an existing guild still busts the cache.
+            if (channels === -1) {
+                try {
+                    const gcs: any = (typeof GuildChannelStore !== "undefined" ? GuildChannelStore : null) as any;
+                    if (gcs && typeof gcs.getAllGuilds === "function") {
+                        const all = gcs.getAllGuilds();
+                        if (all && typeof all === "object") {
+                            let count = 0;
+                            for (const v of Object.values(all as Record<string, unknown>)) {
+                                count += asChannelArray(v).length;
+                            }
+                            if (count > 0) channels = count;
+                        }
+                    }
+                } catch {
+                    /* ignore */
+                }
             }
         } catch {
             /* ignore */
@@ -703,6 +725,19 @@ export function getLastGuildChannelId(guildId: string): string | null {
             } catch {
                 /* single-source failure must not poison the rest */
             }
+            try {
+                // Threads are absent from selectable/vocal lists: without
+                // this a persisted thread id looks stale and needlessly
+                // falls back to the guild (first channel).
+                if (typeof cs?.getAllThreadsForGuild === "function") {
+                    for (const ch of asChannelArray(cs.getAllThreadsForGuild(guildId))) {
+                        const cid = (ch as any)?.id;
+                        if (typeof cid === "string" && cid) ids.add(cid);
+                    }
+                }
+            } catch {
+                /* threads are best-effort */
+            }
             if (ids.size > 0) known = ids;
         } catch {
             /* list failure -> cannot judge staleness, trust below */
@@ -758,7 +793,6 @@ export function getLastGuildChannelId(guildId: string): string | null {
 
 function navigateTo(item: SearchableItem, onDone: () => void): void {
     try {
-        recordOpen(item.id);
         if (item.type === "guild") {
             // Restore the last channel like a native server click does.
             // Bare transitionToGuild(guildId) lands on the first channel,
@@ -782,6 +816,13 @@ function navigateTo(item: SearchableItem, onDone: () => void): void {
             (ChannelActionCreators as any)?.openPrivateChannel?.(item.id);
         } else {
             (ChannelRouter as any)?.transitionToChannel?.(item.id);
+        }
+        // Record only after the navigation attempt: a throwing router
+        // must not boost a destination we never reached.
+        try {
+            recordOpen(item.id);
+        } catch {
+            /* recency is best-effort */
         }
     } catch (e) {
         logger.error("navigate failed", e);
@@ -1082,7 +1123,8 @@ function QuickFindModal({ onClose }: { onClose: () => void; }) {
     }, [focusInput]);
 
     useEffect(() => {
-        const ms: number = settings.store.debounceMs ?? 50;
+        const rawMs = Number((settings.store as any)?.debounceMs ?? 50);
+        const ms = Number.isFinite(rawMs) ? Math.min(500, Math.max(0, rawMs)) : 50;
         if (debounceRef.current != null) clearTimeout(debounceRef.current);
         debounceRef.current = setTimeout(() => {
             debounceRef.current = null;
@@ -1107,6 +1149,15 @@ function QuickFindModal({ onClose }: { onClose: () => void; }) {
             setSel(0);
         }
     }, [debounced, tab]);
+
+    const currentGuildId: string | null = (() => {
+        try {
+            const g = (SelectedGuildStore as any)?.getGuildId?.();
+            return typeof g === "string" && g ? g : null;
+        } catch {
+            return null;
+        }
+    })();
 
     const results = useMemo(() => {
         const s = settings.store;
@@ -1142,7 +1193,7 @@ function QuickFindModal({ onClose }: { onClose: () => void; }) {
             normalize: st.normalize ?? true,
             maxResults: st.maxResults ?? 30,
             sortBy: (st.sortBy as SortBy) ?? "relevance",
-            currentGuildId: (() => { try { return (SelectedGuildStore as any)?.getGuildId?.() ?? null; } catch { return null; } })(),
+            currentGuildId,
             currentGuildBoost: (st.currentGuildBoost ?? true) ? 25 : 0,
             recentBoost: (st.recentBoost ?? true) ? 30 : 0,
             kindOrder: KIND_ORDER_PRESETS[st.kindOrder as string] ?? null,
@@ -1153,6 +1204,7 @@ function QuickFindModal({ onClose }: { onClose: () => void; }) {
         allItems,
         debounced,
         tab,
+        currentGuildId,
         (settings.store as any).searchMode,
         (settings.store as any).fuzzyEnabled,
         (settings.store as any).sensitivity,

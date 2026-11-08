@@ -74,17 +74,30 @@ export function sanitizeRecentMap(raw: unknown): RecentMap {
         if (typeof e.count !== "number" || !Number.isFinite(e.count) || e.count < 0) continue;
         if (typeof e.lastAt !== "number" || !Number.isFinite(e.lastAt) || e.lastAt < 0) continue;
         out[k] = { count: Math.floor(e.count), lastAt: e.lastAt };
-        if (Object.keys(out).length >= MAX_ENTRIES) break;
+        if (Object.keys(out).length >= MAX_ENTRIES * 2) break;
+    }
+    // Keep the most-recent entries, not the first 60 in insertion order:
+    // without this a bloated/corrupt payload keeps stale rows.
+    const keys = Object.keys(out).sort((a, b) => (out[b]?.lastAt ?? 0) - (out[a]?.lastAt ?? 0));
+    if (keys.length > MAX_ENTRIES) {
+        const trimmed: RecentMap = {};
+        for (const k of keys.slice(0, MAX_ENTRIES)) trimmed[k] = out[k];
+        return trimmed;
     }
     return out;
 }
 
 export function recordOpen(id: string, at = Date.now()): void {
     if (typeof id !== "string" || !id) return;
+    // Validate timestamp: NaN/Infinity/negative would poison recency sort
+    // (NaN comparator) and serialize to null in JSON.
+    const ts = Number.isFinite(at) && (at as number) >= 0 ? (at as number) : Date.now();
     loadRecents();
     const e = mem[id] ?? { count: 0, lastAt: 0 };
     e.count += 1;
-    e.lastAt = at;
+    // Cap count to avoid unbounded growth over years of use.
+    if (!Number.isFinite(e.count) || e.count > 1000000) e.count = 1000000;
+    e.lastAt = ts;
     mem[id] = e;
     save();
 }
@@ -94,9 +107,10 @@ export function attachRecents<T extends { id: string; lastOpenedAt?: number; use
     const map = loadRecents();
     for (const it of items) {
         const e = map[it.id];
-        // Defensive: only well-formed entries boost; anything else (e.g. a
-        // payload written before validation existed) clears like a miss.
-        if (e && typeof e.count === "number" && typeof e.lastAt === "number") {
+        // Defensive: only well-formed finite entries boost; anything else
+        // (e.g. a payload written before validation existed) clears like a miss.
+        if (e && typeof e.count === "number" && typeof e.lastAt === "number"
+            && Number.isFinite(e.count) && Number.isFinite(e.lastAt) && e.count >= 0 && e.lastAt >= 0) {
             it.lastOpenedAt = e.lastAt;
             it.useCount = e.count;
         } else {

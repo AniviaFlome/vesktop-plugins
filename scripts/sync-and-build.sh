@@ -2,6 +2,17 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Single-instance guard: a parallel/mid-sync build emits a dist/ without the
+# plugin and fails silently (see AGENTS.md). Fail fast instead of interleaving
+# rm/cp/build with another instance.
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$ROOT/.sync-build.lock"
+    if ! flock -n 9; then
+        echo "ERROR: another sync-and-build is running (lock $ROOT/.sync-build.lock)" >&2
+        exit 1
+    fi
+fi
+
 # Fail early when the pinned upstream checkout is absent (git-ignored,
 # so a fresh clone has no Vencord/).
 if [ ! -f "$ROOT/Vencord/package.json" ]; then
@@ -42,9 +53,15 @@ for f in vencordDesktopMain.js vencordDesktopPreload.js vencordDesktopRenderer.j
     fi
     ln -sf "dist/$f" "$f"
 done
+# Repo-root safety net (see AGENTS.md): if Vesktop's Vencord Location ever
+# points at the repo root instead of Vencord/dist, these symlinks keep it
+# working instead of silently breaking all of Vencord.
+for f in vencordDesktopMain.js vencordDesktopPreload.js vencordDesktopRenderer.js vencordDesktopRenderer.css; do
+    ln -sf "Vencord/dist/$f" "$ROOT/$f"
+done
 
 ROOT_DIR="$ROOT" python3 - "$HOME/.config/vesktop/state.json" <<'EOF'
-import json, os, sys
+import json, os, sys, shutil, time
 p = sys.argv[1]
 want = os.path.join(os.environ["ROOT_DIR"], "Vencord", "dist")
 try:
@@ -52,17 +69,28 @@ try:
         s = json.load(f)
     created = False
 except FileNotFoundError:
-    # A missing state.json is created; corrupt JSON exits 1.
+    # A missing state.json is created; corrupt JSON is backed up, not lost.
     s = {}
     created = True
 except Exception as e:
-    print(f"ERROR: cannot parse {p}: {e}", file=sys.stderr)
+    try:
+        bak = f"{p}.corrupt-{int(time.time())}.bak"
+        shutil.copyfile(p, bak)
+        print(f"ERROR: cannot parse {p}: {e}; backed up to {bak}", file=sys.stderr)
+    except Exception:
+        print(f"ERROR: cannot parse {p}: {e}", file=sys.stderr)
     sys.exit(1)
 if s.get("vencordDir") != want:
     action = "creating" if created else "repairing"
     print(f"{action} vencordDir -> {want}")
     s["vencordDir"] = want
     os.makedirs(os.path.dirname(p), exist_ok=True)
+    # Backup before overwrite so a crash mid-write never loses settings.
+    try:
+        if os.path.exists(p):
+            shutil.copyfile(p, f"{p}.bak")
+    except Exception as e:
+        print(f"WARN: state backup failed: {e}", file=sys.stderr)
     with open(p, "w") as f:
         json.dump(s, f, indent=4)
 else:

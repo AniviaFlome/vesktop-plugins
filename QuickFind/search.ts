@@ -84,10 +84,14 @@ export const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
  * strip leading emoji/punctuation so "#-general" and "🎮general" still match.
  */
 export function normalizeString(input: string, caseSensitive = false): string {
+    // Defensive: Discord names should be strings, but a single malformed
+    // record (number/null) must not throw and empty the whole list.
+    // Coerce non-strings instead of calling .normalize on them.
+    const rawInput = typeof input === "string" ? input : String((input as unknown) ?? "");
     // NFKC first: folds compatibility characters to ASCII (fullwidth ｓ→s,
     // mathematical alphanumeric 𝐬→s, ligatures ﬁ→fi). Without this, typing
     // plain ASCII can never match Discord's stylized names.
-    let s = input.normalize("NFKC");
+    let s = rawInput.normalize("NFKC");
     s = s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     if (!caseSensitive) s = s.toLowerCase();
     // Remove leading characters that are not letters/numbers for ranking
@@ -103,7 +107,11 @@ const NORMALIZED_MEMO_MAX = 30000;
 
 export function buildIndex<T extends SearchableItem>(items: T[], caseSensitive = false, doNormalize = true): T[] {
     for (const it of items) {
-        const base = it.name ?? "";
+        // Coerce non-string names (number/null from malformed stores):
+        // without this a single bad record throws and empties the list.
+        const base = typeof (it as unknown as { name: unknown }).name === "string"
+            ? (it.name as unknown as string)
+            : String((it.name as unknown) ?? "");
         if (!doNormalize) {
             it.normalized = caseSensitive ? base : base.toLowerCase();
             continue;
@@ -171,6 +179,11 @@ function isWordBoundary(ch: string): boolean {
 export function fuzzyScore(query: string, target: string, sensitivity: number): number {
     if (!query) return 0;
     if (!target) return -1;
+    // Clamp out-of-range/corrupt sensitivity (settings file, NaN): without
+    // this >1 rejects everything and NaN/<0 degrades to loosest match.
+    const sens = Number.isFinite(sensitivity)
+        ? Math.min(1, Math.max(0, sensitivity))
+        : DEFAULT_SEARCH_OPTIONS.sensitivity;
     // A longer query can never be a subsequence of a shorter target.
     if (query.length > target.length) return -1; // early exit
 
@@ -196,7 +209,7 @@ export function fuzzyScore(query: string, target: string, sensitivity: number): 
             consecutive = 0;
             // Early exit: too many skips to ever pass threshold
             // Allow roughly (1-sensitivity)*target.length + query.length*2 skips
-            const maxSkips = Math.floor((1 - sensitivity) * target.length) + query.length * 2;
+            const maxSkips = Math.floor((1 - sens) * target.length) + query.length * 2;
             if (skipped > maxSkips + 20) return -1;
         }
         ti++;
@@ -210,7 +223,7 @@ export function fuzzyScore(query: string, target: string, sensitivity: number): 
     // Prefer shorter names slightly
     score -= target.length * 0.15;
 
-    const minScore = query.length * 10 * sensitivity;
+    const minScore = query.length * 10 * sens;
     if (score < minScore) return -1;
     return score;
 }
@@ -341,9 +354,13 @@ export function rankAndFilter<T extends SearchableItem>(
         ? normalizeString(clean, opts.caseSensitive)
         : (opts.caseSensitive ? clean : clean.toLowerCase());
     const kindOrder = opts.kindOrder ?? null;
-    // Clamp: a 0/negative maxResults (possible with free sliders) must not
-    // blank the list; treat as "show at least 1".
-    const maxResults = Math.max(1, Math.floor(opts.maxResults ?? DEFAULT_SEARCH_OPTIONS.maxResults));
+    // Clamp: 0/negative must not blank the list; non-finite (NaN/Infinity/
+    // corrupt string) must not return the whole 5k-item index and freeze the
+    // DOM. Upper cap 200 keeps large guild lists renderable.
+    const rawMax = Number(opts.maxResults);
+    const maxResults = Number.isFinite(rawMax)
+        ? Math.min(200, Math.max(1, Math.floor(rawMax)))
+        : DEFAULT_SEARCH_OPTIONS.maxResults;
     // Priority boost only applies to real queries: on empty queries every
     // item ties and the boost would collapse the interleave below into
     // strict kind tiers. There the preset order drives the round-robin.

@@ -38,3 +38,5 @@ jobs:
       - name: npm audit
         run: npm audit --audit-level=moderate
         working-directory: QuickFind/e2e
+      - name: shell syntax
+        run: bash -n scripts/sync-and-build.sh

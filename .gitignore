@@ -12,6 +12,12 @@ QuickFind/e2e/node_modules/
 dist/
 QuickFind/e2e/dist/
 *.bundle.js
+# Repo-root Vesktop safety-net symlinks + build lock (see scripts/sync-and-build.sh).
+vencordDesktopMain.js
+vencordDesktopPreload.js
+vencordDesktopRenderer.js
+vencordDesktopRenderer.css
+.sync-build.lock
 
 # --- Logs ---
 npm-debug.log*
