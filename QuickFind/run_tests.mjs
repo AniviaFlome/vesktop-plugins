@@ -18,7 +18,7 @@ import {
 } from "./search.ts";
 import { applyFilters, DEFAULT_FILTERS } from "./filters.ts";
 import { dedupeUserRows } from "./filters.ts";
-import { asChannelArray, channelTypeToItem, gatherChannelCandidates, isArchivedChannel, resolveGuildId } from "./channelSources.ts";
+import { asChannelArray, channelTypeToItem, gatherChannelCandidates, isArchivedChannel, parsePersistedSelection, readPersistedSelection, resolveGuildId } from "./channelSources.ts";
 import { __resetForTests, attachRecents, clearRecents, loadRecents, recordOpen, sanitizeRecentMap } from "./recents.ts";
 
 let passed = 0;
@@ -417,6 +417,30 @@ const _guilds = { g1: { id: "g1", name: "G1" }, g2: { id: "g2", name: "G2" } };
     eq(resolveGuildId({ getGuildId: () => "g9" }), "g9", "resolveGuildId falls back to getGuildId()");
     const frozen = Object.freeze({ id: "x" });
     eq(resolveGuildId(frozen), null, "resolveGuildId returns null when absent");
+}
+{
+    // parsePersistedSelection reads Discord's localStorage blob shape.
+    const blob = {
+        selectedChannelId: "c1",
+        selectedChannelIds: { g1: "c2", g2: "c3", "@me": "dm1" },
+        mostRecentSelectedTextChannelIds: { g1: "c4" },
+        knownThreadIds: ["t1"],
+    };
+    const p = parsePersistedSelection(blob);
+    ok(p !== null, "valid blob parses");
+    eq(p.byGuild["g1"], "c2", "byGuild maps guild to channel");
+    eq(p.byGuild["g2"], "c3", "byGuild keeps all guilds");
+    eq(p.recentText["g1"], "c4", "recentText maps guild to channel");
+    ok(!("@me" in p.byGuild), "@-sentinel ids skipped");
+    const fromJson = parsePersistedSelection(JSON.stringify(blob));
+    eq(fromJson.byGuild["g1"], "c2", "JSON string input parses");
+    eq(parsePersistedSelection(null), null, "null sanitizes to null");
+    eq(parsePersistedSelection("not json{{"), null, "corrupt JSON sanitizes to null");
+    eq(parsePersistedSelection({ selectedChannelIds: { g1: 42, g2: null, g3: "" } }), null, "non-string values leave empty maps -> null");
+    eq(parsePersistedSelection({}), null, "empty blob sanitizes to null");
+    eq(parsePersistedSelection([]), null, "array sanitizes to null");
+    // node has no localStorage: reader degrades to null, never throws.
+    eq(readPersistedSelection(), null, "readPersistedSelection null without DOM");
 }
 {
     // isArchivedChannel covers every known shape.

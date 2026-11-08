@@ -18,6 +18,9 @@ global.KeyboardEvent = dom.window.KeyboardEvent;
 global.MouseEvent = dom.window.MouseEvent;
 global.Event = dom.window.Event;
 global.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+// jsdom localStorage (needs the https origin above): the bundle reads
+// Discord's persisted-selection key from it, and recents persist here too.
+global.localStorage = dom.window.localStorage;
 
 // Record scrollIntoView calls (jsdom has no layout).
 const scrollCalls = [];
@@ -335,6 +338,65 @@ async function main() {
         // Navigation tests record opens; reset recency so later ranking
         // tests (14c) see a deterministic baseline, not our leftovers.
         require("./dist/bundle.cjs").clearRecents();
+    }
+
+    // 6d. Fresh-boot backfill: guild never visited this session (no store
+    // memory) still lands on Discord's own persisted last channel
+    // (localStorage "SelectedChannelStore" blob), not the first channel.
+    {
+        const { __lastSelected } = require("./dist/bundle.cjs");
+        const openAndPickGuild = async () => {
+            await key(window, "keydown", { key: "k", ctrlKey: true });
+            await flush();
+            const inp = document.querySelector("input.qsplus-input");
+            const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value").set;
+            await act(async () => {
+                setter.call(inp, "alpha server");
+                inp.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+            });
+            await flush();
+            testApi.resetSpies();
+            await key(inp, "keydown", { key: "Enter" });
+            await flush();
+            ok(!document.querySelector("input.qsplus-input"), "modal closed after guild pick");
+        };
+        const BLOB_KEY = "SelectedChannelStore";
+        __lastSelected.channels.delete("g1");
+        try {
+            globalThis.localStorage.setItem(BLOB_KEY, JSON.stringify({
+                selectedChannelIds: { g1: "c6" },
+                mostRecentSelectedTextChannelIds: {},
+            }));
+            await openAndPickGuild();
+            ok(
+                testApi.spies.transitionToChannel.length === 1 && testApi.spies.transitionToChannel[0] === "c6" && testApi.spies.transitionToGuild.length === 0,
+                "unvisited guild uses persisted last channel (c6), not first",
+                JSON.stringify(testApi.spies),
+            );
+            globalThis.localStorage.setItem(BLOB_KEY, JSON.stringify({
+                selectedChannelIds: {},
+                mostRecentSelectedTextChannelIds: { g1: "c2" },
+            }));
+            await openAndPickGuild();
+            ok(
+                testApi.spies.transitionToChannel.length === 1 && testApi.spies.transitionToChannel[0] === "c2",
+                "persisted recent-text map resolves too",
+                JSON.stringify(testApi.spies),
+            );
+            globalThis.localStorage.setItem(BLOB_KEY, JSON.stringify({
+                selectedChannelIds: { g1: "999999999999999999" },
+                mostRecentSelectedTextChannelIds: {},
+            }));
+            await openAndPickGuild();
+            ok(
+                testApi.spies.transitionToGuild.length === 1 && testApi.spies.transitionToGuild[0] === "g1",
+                "stale persisted id falls back to guild",
+                JSON.stringify(testApi.spies),
+            );
+        } finally {
+            globalThis.localStorage.removeItem(BLOB_KEY);
+            __lastSelected.channels.set("g1", "c2");
+        }
     }
 
     // 7. Reopen works repeatedly (regression: dead ctrl+k after close).

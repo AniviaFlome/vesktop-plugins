@@ -41,6 +41,7 @@ import {
     channelTypeToItem,
     gatherChannelCandidates,
     isArchivedChannel,
+    readPersistedSelection,
     resolveGuildId,
 } from "./channelSources";
 import { attachRecents, clearRecents, recordOpen } from "./recents";
@@ -76,7 +77,7 @@ function dlog(...args: any[]): void {
 
 /** Bump on every shipped iteration. Logged by the probe dump so a pasted
  * probe output proves which build is actually running. */
-export const BUILD_TAG = "qf+v2";
+export const BUILD_TAG = "qf+v3";
 
 const settings = definePluginSettings({
     // --- hijack ---
@@ -645,7 +646,35 @@ export function collectItems(): SearchableItem[] {
  *   let transitionToChannel load it. The old code rejected every miss,
  *   which is the "still goes to first channel" regression.
  */
+/** Which layer resolved the last guild-channel lookup (probe diagnostics). */
+let lastResolveDetail = "none";
+/** What Discord's persisted selection blob contributed (probe diagnostics). */
+let lastPersistedDetail = "n/a";
+
+/**
+ * Validate one last-channel candidate id. Cached hits must belong to this
+ * guild; uncached ids (lookup miss OR lookup blew up) are trusted unless
+ * the loaded guild lists prove them stale. Returns the id or null.
+ */
+function checkCandidate(guildId: string, known: Set<string> | null, rawId: unknown): string | null {
+    if (typeof rawId !== "string" || !rawId || rawId.startsWith("@")) return null;
+    let ch: any = null;
+    try {
+        ch = (ChannelStore as any)?.getChannel?.(rawId);
+    } catch {
+        ch = null;
+    }
+    if (ch) {
+        if (resolveGuildId(ch) !== guildId) return null;
+        return rawId;
+    }
+    if (known && !known.has(rawId)) return null;
+    return rawId;
+}
+
 export function getLastGuildChannelId(guildId: string): string | null {
+    lastResolveDetail = "pending";
+    lastPersistedDetail = "not-probed";
     try {
         const scs: any = SelectedChannelStore as any;
         if (!scs || typeof guildId !== "string" || !guildId) return null;
@@ -696,26 +725,34 @@ export function getLastGuildChannelId(guildId: string): string | null {
             } catch {
                 continue;
             }
-            if (typeof id !== "string" || !id || id.startsWith("@")) continue;
-            let ch: any = null;
-            try {
-                ch = (ChannelStore as any)?.getChannel?.(id);
-            } catch {
-                // Lookup blew up: treat exactly like a cache miss (trust
-                // unless proven stale below), never as a rejection.
-                ch = null;
+            const hit = checkCandidate(guildId, known, id);
+            if (hit) {
+                lastResolveDetail = "store";
+                return hit;
             }
-            if (ch) {
-                if (resolveGuildId(ch) !== guildId) continue;
-                return id;
+        }
+        // Fresh boot / never visited this session: the live store is empty,
+        // but Discord persists the same per-guild map under localStorage
+        // "SelectedChannelStore" on every select — read it directly for a
+        // full backfill (no seeding needed, covers native clicks too).
+        lastPersistedDetail = typeof localStorage === "undefined" ? "unavailable" : "none";
+        const persisted = readPersistedSelection();
+        if (persisted) {
+            for (const cand of [persisted.byGuild[guildId], persisted.recentText[guildId]]) {
+                if (cand == null) continue;
+                const hit = checkCandidate(guildId, known, cand);
+                if (hit) {
+                    lastPersistedDetail = "hit";
+                    lastResolveDetail = "persisted";
+                    return hit;
+                }
+                lastPersistedDetail = "stale";
             }
-            // Uncached: stale only when the loaded guild lists prove it.
-            if (known && !known.has(id)) continue;
-            return id;
         }
     } catch {
         /* fall through to guild fallback */
     }
+    lastResolveDetail = "guild-fallback";
     return null;
 }
 
@@ -1589,7 +1626,8 @@ export default definePlugin({
                     const api = ["getChannelId", "getCurrentlySelectedChannelId", "getLastSelectedChannelId", "getMostRecentSelectedTextChannelId"]
                         .map(k => `${k}:${typeof scs?.[k]}`).join(" ");
                     const cur = (() => { try { return sg?.getGuildId?.() ?? "?"; } catch { return "?"; } })();
-                    lines.push(`LASTCHAN ${api} curGuild=${cur} resolved=${cur && cur !== "?" ? (getLastGuildChannelId(cur) ?? "guild-fallback") : "n/a"}`);
+                    const resolved = cur && cur !== "?" ? (getLastGuildChannelId(cur) ?? "guild-fallback") : "n/a";
+                    lines.push(`LASTCHAN ${api} curGuild=${cur} resolved=${resolved} via=${lastResolveDetail} persisted=${lastPersistedDetail}`);
                 } catch (e) {
                     lines.push(`LASTCHAN: unreadable (${String(e).slice(0, 120)})`);
                 }

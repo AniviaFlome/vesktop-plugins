@@ -136,6 +136,67 @@ export function resolveGuildId(ch: any): string | null {
     return null;
 }
 
+/**
+ * Discord's own per-guild last-channel memory, persisted under the
+ * localStorage key "SelectedChannelStore" (written on every select,
+ * read back on store init):
+ * `{ selectedChannelIds: { [guildId]: channelId },
+ *    mostRecentSelectedTextChannelIds: { [guildId]: channelId }, ... }`.
+ * The live SelectedChannelStore getters cover in-session visits; this covers
+ * fresh boots where the store is still empty (e.g. a server not yet visited
+ * manually). Pure: unknown/corrupt payloads sanitize to null. Unit-tested.
+ */
+export interface PersistedSelection {
+    /** Raw per-guild last channel (any type Discord remembered). */
+    byGuild: Record<string, string>;
+    /** Discord-filtered recent TEXT channels per guild. */
+    recentText: Record<string, string>;
+}
+
+const PERSISTED_SELECTION_KEY = "SelectedChannelStore";
+const MAX_PERSISTED_GUILDS = 500;
+
+function sanitizeIdMap(raw: unknown): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof k !== "string" || !k || k.startsWith("@")) continue;
+        if (typeof v !== "string" || !v || v.startsWith("@")) continue;
+        out[k] = v;
+        if (Object.keys(out).length >= MAX_PERSISTED_GUILDS) break;
+    }
+    return out;
+}
+
+/** Parse an already-read persisted blob (object or JSON string). */
+export function parsePersistedSelection(raw: unknown): PersistedSelection | null {
+    try {
+        const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+        const o = obj as Record<string, unknown>;
+        const byGuild = sanitizeIdMap(o.selectedChannelIds);
+        const recentText = sanitizeIdMap(o.mostRecentSelectedTextChannelIds);
+        if (Object.keys(byGuild).length === 0 && Object.keys(recentText).length === 0) return null;
+        return { byGuild, recentText };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Best-effort read of Discord's persisted selection blob. Returns null when
+ * storage is unavailable (no DOM, blocked) or holds nothing usable — never
+ * throws. Callers still validate any id against loaded guild data.
+ */
+export function readPersistedSelection(): PersistedSelection | null {
+    try {
+        if (typeof localStorage === "undefined") return null;
+        return parsePersistedSelection(localStorage.getItem(PERSISTED_SELECTION_KEY));
+    } catch {
+        return null;
+    }
+}
+
 /** Archived threads hide behind several shapes across builds. */
 export function isArchivedChannel(ch: any): boolean {
     try {
